@@ -2248,6 +2248,9 @@ public class YarnConfiguration extends Configuration {
   public static final String 
   YARN_SECURITY_SERVICE_AUTHORIZATION_APPLICATIONMASTER_PROTOCOL =
       "security.applicationmaster.protocol.acl";
+  public static final String
+      YARN_SECURITY_SERVICE_AUTHORIZATION_DISTRIBUTEDSCHEDULING_PROTOCOL =
+      "security.distributedscheduling.protocol.acl";
 
   public static final String 
   YARN_SECURITY_SERVICE_AUTHORIZATION_CONTAINER_MANAGEMENT_PROTOCOL =
@@ -2263,6 +2266,10 @@ public class YarnConfiguration extends Configuration {
   public static final String
       YARN_SECURITY_SERVICE_AUTHORIZATION_COLLECTOR_NODEMANAGER_PROTOCOL =
       "security.collector-nodemanager.protocol.acl";
+
+  public static final String
+      YARN_SECURITY_SERVICE_AUTHORIZATION_APPLICATIONMASTER_NODEMANAGER_PROTOCOL =
+      "security.applicationmaster-nodemanager.applicationmaster.protocol.acl";
 
   /** No. of milliseconds to wait between sending a SIGTERM and SIGKILL
    * to a running container */
@@ -3658,6 +3665,13 @@ public class YarnConfiguration extends Configuration {
   public static final String
       DEFAULT_TIMELINE_SERVICE_READER_WEBAPP_HTTPS_ADDRESS =
       DEFAULT_TIMELINE_SERVICE_WEBAPP_HTTPS_ADDRESS;
+
+  @Private
+  public static final String
+      TIMELINE_SERVICE_READER_STORAGE_MONITOR_INTERVAL_MS =
+      TIMELINE_SERVICE_READER_PREFIX + "storage-monitor.interval-ms";
+  public static final long
+      DEFAULT_TIMELINE_SERVICE_STORAGE_MONITOR_INTERVAL_MS = 60 * 1000;
 
   /**
    * Marked collector properties as Private since it run as auxillary service.

@@ -17,8 +17,10 @@
 
 package org.apache.hadoop.hdds.scm.container;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.scm.ScmConfigKeys;
 import org.apache.hadoop.hdds.scm.container.common.helpers.ContainerWithPipeline;
 import org.apache.hadoop.hdds.scm.container.common.helpers.ContainerInfo;
@@ -461,6 +463,17 @@ public class ContainerStateManager implements Closeable {
   }
 
   /**
+   * Returns a set of open ContainerIDs that reside on a pipeline.
+   *
+   * @param pipeline Pipeline of the Containers.
+   * @return Set of containers that match the specific query parameters.
+   */
+  public NavigableSet<ContainerID> getMatchingContainerIDsByPipeline(String
+      pipeline) {
+    return containers.getOpenContainerIDsByPipeline(pipeline);
+  }
+
+  /**
    * Returns the containerInfo with pipeline for the given container id.
    * @param selector -- Pipeline selector class.
    * @param containerID id of the container
@@ -488,4 +501,42 @@ public class ContainerStateManager implements Closeable {
   public void close() throws IOException {
   }
 
+  /**
+   * Returns the latest list of DataNodes where replica for given containerId
+   * exist. Throws an SCMException if no entry is found for given containerId.
+   *
+   * @param containerID
+   * @return Set<DatanodeDetails>
+   */
+  public Set<DatanodeDetails> getContainerReplicas(ContainerID containerID)
+      throws SCMException {
+    return containers.getContainerReplicas(containerID);
+  }
+
+  /**
+   * Add a container Replica for given DataNode.
+   *
+   * @param containerID
+   * @param dn
+   */
+  public void addContainerReplica(ContainerID containerID, DatanodeDetails dn) {
+    containers.addContainerReplica(containerID, dn);
+  }
+
+  /**
+   * Remove a container Replica for given DataNode.
+   *
+   * @param containerID
+   * @param dn
+   * @return True of dataNode is removed successfully else false.
+   */
+  public boolean removeContainerReplica(ContainerID containerID,
+      DatanodeDetails dn) throws SCMException {
+    return containers.removeContainerReplica(containerID, dn);
+  }
+  
+  @VisibleForTesting
+  public ContainerStateMap getContainerStateMap() {
+    return containers;
+  }
 }

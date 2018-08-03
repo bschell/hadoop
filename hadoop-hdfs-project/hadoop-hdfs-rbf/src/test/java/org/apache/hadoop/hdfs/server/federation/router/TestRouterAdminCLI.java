@@ -82,6 +82,7 @@ public class TestRouterAdminCLI {
         .stateStore()
         .admin()
         .rpc()
+        .safemode()
         .build();
     cluster.addRouterOverrides(conf);
 
@@ -114,6 +115,14 @@ public class TestRouterAdminCLI {
         Mockito.anyLong(), Mockito.anyLong(), Mockito.any());
     Whitebox.setInternalState(
         routerContext.getRouter().getRpcServer(), "quotaCall", quota);
+
+    RouterRpcServer spyRpcServer =
+        Mockito.spy(routerContext.getRouter().createRpcServer());
+    Whitebox
+        .setInternalState(routerContext.getRouter(), "rpcServer", spyRpcServer);
+
+    Mockito.doReturn(null).when(spyRpcServer).getFileInfo(Mockito.anyString());
+
   }
 
   @AfterClass
@@ -446,10 +455,10 @@ public class TestRouterAdminCLI {
     // verify the default quota set
     assertEquals(RouterQuotaUsage.QUOTA_USAGE_COUNT_DEFAULT,
         quotaUsage.getFileAndDirectoryCount());
-    assertEquals(HdfsConstants.QUOTA_DONT_SET, quotaUsage.getQuota());
+    assertEquals(HdfsConstants.QUOTA_RESET, quotaUsage.getQuota());
     assertEquals(RouterQuotaUsage.QUOTA_USAGE_COUNT_DEFAULT,
         quotaUsage.getSpaceConsumed());
-    assertEquals(HdfsConstants.QUOTA_DONT_SET, quotaUsage.getSpaceQuota());
+    assertEquals(HdfsConstants.QUOTA_RESET, quotaUsage.getSpaceQuota());
 
     long nsQuota = 50;
     long ssQuota = 100;
@@ -493,21 +502,21 @@ public class TestRouterAdminCLI {
     quotaUsage = mountTable.getQuota();
 
     // verify if quota unset successfully
-    assertEquals(HdfsConstants.QUOTA_DONT_SET, quotaUsage.getQuota());
-    assertEquals(HdfsConstants.QUOTA_DONT_SET, quotaUsage.getSpaceQuota());
+    assertEquals(HdfsConstants.QUOTA_RESET, quotaUsage.getQuota());
+    assertEquals(HdfsConstants.QUOTA_RESET, quotaUsage.getSpaceQuota());
   }
 
   @Test
   public void testManageSafeMode() throws Exception {
     // ensure the Router become RUNNING state
     waitState(RouterServiceState.RUNNING);
-    assertFalse(routerContext.getRouter().getRpcServer().isInSafeMode());
+    assertFalse(routerContext.getRouter().getSafemodeService().isInSafeMode());
     assertEquals(0, ToolRunner.run(admin,
         new String[] {"-safemode", "enter"}));
     // verify state
     assertEquals(RouterServiceState.SAFEMODE,
         routerContext.getRouter().getRouterState());
-    assertTrue(routerContext.getRouter().getRpcServer().isInSafeMode());
+    assertTrue(routerContext.getRouter().getSafemodeService().isInSafeMode());
 
     System.setOut(new PrintStream(out));
     assertEquals(0, ToolRunner.run(admin,
@@ -519,7 +528,7 @@ public class TestRouterAdminCLI {
     // verify state
     assertEquals(RouterServiceState.RUNNING,
         routerContext.getRouter().getRouterState());
-    assertFalse(routerContext.getRouter().getRpcServer().isInSafeMode());
+    assertFalse(routerContext.getRouter().getSafemodeService().isInSafeMode());
 
     out.reset();
     assertEquals(0, ToolRunner.run(admin,

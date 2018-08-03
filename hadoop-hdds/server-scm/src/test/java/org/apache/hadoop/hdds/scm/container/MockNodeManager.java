@@ -16,6 +16,7 @@
  */
 package org.apache.hadoop.hdds.scm.container;
 
+import org.apache.hadoop.hdds.scm.TestUtils;
 import org.apache.hadoop.hdds.scm.container.placement.metrics.SCMNodeMetric;
 import org.apache.hadoop.hdds.scm.container.placement.metrics.SCMNodeStat;
 import org.apache.hadoop.hdds.scm.node.NodeManager;
@@ -26,8 +27,10 @@ import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.NodeReportProto;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.SCMVersionRequestProto;
+import org.apache.hadoop.hdds.server.events.EventPublisher;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.protocol.VersionResponse;
+import org.apache.hadoop.ozone.protocol.commands.CommandForDatanode;
 import org.apache.hadoop.ozone.protocol.commands.RegisteredCommand;
 import org.apache.hadoop.ozone.protocol.commands.SCMCommand;
 import org.assertj.core.util.Preconditions;
@@ -39,7 +42,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import static org.apache.hadoop.hdds.scm.TestUtils.getDatanodeDetails;
 import static org.apache.hadoop.hdds.protocol.proto.HddsProtos.NodeState.DEAD;
 import static org.apache.hadoop.hdds.protocol.proto.HddsProtos.NodeState
     .HEALTHY;
@@ -78,7 +80,7 @@ public class MockNodeManager implements NodeManager {
     aggregateStat = new SCMNodeStat();
     if (initializeFakeNodes) {
       for (int x = 0; x < nodeCount; x++) {
-        DatanodeDetails dd = getDatanodeDetails();
+        DatanodeDetails dd = TestUtils.randomDatanodeDetails();
         populateNodeMetric(dd, x);
       }
     }
@@ -293,6 +295,17 @@ public class MockNodeManager implements NodeManager {
     }
   }
 
+  /**
+   * Empty implementation for processNodeReport.
+   *
+   * @param dnUuid
+   * @param nodeReport
+   */
+  @Override
+  public void processNodeReport(UUID dnUuid, NodeReportProto nodeReport) {
+    // do nothing
+  }
+
   // Returns the number of commands that is queued to this node manager.
   public int getCommandCount(DatanodeDetails dd) {
     List<SCMCommand> list = commandMap.get(dd.getUuid());
@@ -397,6 +410,13 @@ public class MockNodeManager implements NodeManager {
       aggregateStat.add(stat);
       nodeMetricMap.put(datanodeDetails.getUuid(), stat);
     }
+  }
+
+  @Override
+  public void onMessage(CommandForDatanode commandForDatanode,
+                        EventPublisher publisher) {
+    addDatanodeCommand(commandForDatanode.getDatanodeId(),
+        commandForDatanode.getCommand());
   }
 
   /**

@@ -53,11 +53,7 @@ import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.api.records.QueueACL;
 import org.apache.hadoop.yarn.api.records.QueueState;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
-import org.apache.hadoop.yarn.server.resourcemanager.ClientRMService;
-import org.apache.hadoop.yarn.server.resourcemanager.ClusterMetrics;
-import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
-import org.apache.hadoop.yarn.server.resourcemanager.RMContextImpl;
-import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager;
+import org.apache.hadoop.yarn.server.resourcemanager.*;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
@@ -65,6 +61,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Capacity
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fifo.FifoScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.AppsInfo;
+import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.ClusterUserInfo;
 import org.apache.hadoop.yarn.server.security.ApplicationACLsManager;
 import org.apache.hadoop.yarn.util.AdHocLogDumper;
 import org.apache.hadoop.yarn.util.YarnVersionInfo;
@@ -76,11 +73,12 @@ import org.apache.hadoop.yarn.webapp.JerseyTestBase;
 import org.apache.hadoop.yarn.webapp.WebServicesTestUtils;
 import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
-import org.eclipse.jetty.server.Response;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
@@ -96,6 +94,8 @@ import com.sun.jersey.guice.spi.container.servlet.GuiceContainer;
 import com.sun.jersey.test.framework.WebAppDescriptor;
 
 public class TestRMWebServices extends JerseyTestBase {
+  private static final Logger LOG =
+          LoggerFactory.getLogger(TestRMWebServices.class);
 
   private static MockRM rm;
 
@@ -472,19 +472,19 @@ public class TestRMWebServices extends JerseyTestBase {
     QueueMetrics metrics = rs.getRootQueueMetrics();
     ClusterMetrics clusterMetrics = ClusterMetrics.getMetrics();
 
-    long totalMBExpect = 
+    long totalMBExpect =
         metrics.getAvailableMB() + metrics.getAllocatedMB();
-    long totalVirtualCoresExpect = 
+    long totalVirtualCoresExpect =
         metrics.getAvailableVirtualCores() + metrics.getAllocatedVirtualCores();
-    assertEquals("appsSubmitted doesn't match", 
+    assertEquals("appsSubmitted doesn't match",
         metrics.getAppsSubmitted(), submittedApps);
-    assertEquals("appsCompleted doesn't match", 
+    assertEquals("appsCompleted doesn't match",
         metrics.getAppsCompleted(), completedApps);
     assertEquals("reservedMB doesn't match",
         metrics.getReservedMB(), reservedMB);
-    assertEquals("availableMB doesn't match", 
+    assertEquals("availableMB doesn't match",
         metrics.getAvailableMB(), availableMB);
-    assertEquals("allocatedMB doesn't match", 
+    assertEquals("allocatedMB doesn't match",
         metrics.getAllocatedMB(), allocMB);
     assertEquals("reservedVirtualCores doesn't match",
         metrics.getReservedVirtualCores(), reservedVirtualCores);
@@ -597,11 +597,13 @@ public class TestRMWebServices extends JerseyTestBase {
 
   public void verifyClusterSchedulerFifo(JSONObject json) throws JSONException,
       Exception {
-    assertEquals("incorrect number of elements", 1, json.length());
+    assertEquals("incorrect number of elements in: " + json, 1, json.length());
     JSONObject info = json.getJSONObject("scheduler");
-    assertEquals("incorrect number of elements", 1, info.length());
+    assertEquals("incorrect number of elements in: " + info, 1, info.length());
     info = info.getJSONObject("schedulerInfo");
-    assertEquals("incorrect number of elements", 11, info.length());
+
+    LOG.debug("schedulerInfo: {}", info);
+    assertEquals("incorrect number of elements in: " + info, 11, info.length());
 
     verifyClusterSchedulerFifoGeneric(info.getString("type"),
         info.getString("qstate"), (float) info.getDouble("capacity"),
@@ -841,5 +843,25 @@ public class TestRMWebServices extends JerseyTestBase {
         QueueACL.SUBMIT_APPLICATIONS.name(), mockHsr).isAllowed());
     Assert.assertFalse(webSvc.checkUserAccessToQueue("queue", "yarn",
         QueueACL.ADMINISTER_QUEUE.name(), mockHsr).isAllowed());
+  }
+
+  @Test
+  public void testClusterUserInfo() throws JSONException, Exception {
+    ResourceManager mockRM = mock(ResourceManager.class);
+    Configuration conf = new YarnConfiguration();
+    HttpServletRequest mockHsr = mockHttpServletRequestByUserName("admin");
+    when(mockRM.getRMLoginUser()).thenReturn("yarn");
+    RMWebServices webSvc =
+            new RMWebServices(mockRM, conf, mock(HttpServletResponse.class));
+    ClusterUserInfo userInfo = webSvc.getClusterUserInfo(mockHsr);
+    verifyClusterUserInfo(userInfo, "yarn", "admin");
+  }
+
+  public void verifyClusterUserInfo(ClusterUserInfo userInfo,
+            String rmLoginUser, String requestedUser) {
+    assertEquals("rmLoginUser doesn't match: ",
+            rmLoginUser, userInfo.getRmLoginUser());
+    assertEquals("requestedUser doesn't match: ",
+            requestedUser, userInfo.getRequestedUser());
   }
 }

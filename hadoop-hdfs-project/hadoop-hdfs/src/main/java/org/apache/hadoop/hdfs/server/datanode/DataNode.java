@@ -293,6 +293,8 @@ public class DataNode extends ReconfigurableBase
       "  and rolling upgrades.";
 
   static final int CURRENT_BLOCK_FORMAT_VERSION = 1;
+  public static final int MAX_VOLUME_FAILURE_TOLERATED_LIMIT = -1;
+  public static final String MAX_VOLUME_FAILURES_TOLERATED_MSG = "should be greater than -1";
 
   /** A list of property that are reconfigurable at runtime. */
   private static final List<String> RECONFIGURABLE_PROPERTIES =
@@ -1389,10 +1391,11 @@ public class DataNode extends ReconfigurableBase
 
     int volFailuresTolerated = dnConf.getVolFailuresTolerated();
     int volsConfigured = dnConf.getVolsConfigured();
-    if (volFailuresTolerated < 0 || volFailuresTolerated >= volsConfigured) {
+    if (volFailuresTolerated < MAX_VOLUME_FAILURE_TOLERATED_LIMIT
+        || volFailuresTolerated >= volsConfigured) {
       throw new DiskErrorException("Invalid value configured for "
           + "dfs.datanode.failed.volumes.tolerated - " + volFailuresTolerated
-          + ". Value configured is either less than 0 or >= "
+          + ". Value configured is either greater than -1 or >= "
           + "to the number of configured volumes (" + volsConfigured + ").");
     }
 
@@ -3132,7 +3135,7 @@ public class DataNode extends ReconfigurableBase
   @Override // DataNodeMXBean
   public String getDiskBalancerStatus() {
     try {
-      return this.diskBalancer.queryWorkStatus().toJsonString();
+      return getDiskBalancer().queryWorkStatus().toJsonString();
     } catch (IOException ex) {
       LOG.debug("Reading diskbalancer Status failed. ex:{}", ex);
       return "";
@@ -3510,7 +3513,7 @@ public class DataNode extends ReconfigurableBase
           DiskBalancerException.Result.DATANODE_STATUS_NOT_REGULAR);
     }
 
-    this.diskBalancer.submitPlan(planID, planVersion, planFile, planData,
+    getDiskBalancer().submitPlan(planID, planVersion, planFile, planData,
             skipDateCheck);
   }
 
@@ -3522,7 +3525,7 @@ public class DataNode extends ReconfigurableBase
   public void cancelDiskBalancePlan(String planID) throws
       IOException {
     checkSuperuserPrivilege();
-    this.diskBalancer.cancelPlan(planID);
+    getDiskBalancer().cancelPlan(planID);
   }
 
   /**
@@ -3533,7 +3536,7 @@ public class DataNode extends ReconfigurableBase
   @Override
   public DiskBalancerWorkStatus queryDiskBalancerPlan() throws IOException {
     checkSuperuserPrivilege();
-    return this.diskBalancer.queryWorkStatus();
+    return getDiskBalancer().queryWorkStatus();
   }
 
   /**
@@ -3550,9 +3553,9 @@ public class DataNode extends ReconfigurableBase
     Preconditions.checkNotNull(key);
     switch (key) {
     case DiskBalancerConstants.DISKBALANCER_VOLUME_NAME:
-      return this.diskBalancer.getVolumeNames();
+      return getDiskBalancer().getVolumeNames();
     case DiskBalancerConstants.DISKBALANCER_BANDWIDTH :
-      return Long.toString(this.diskBalancer.getBandwidth());
+      return Long.toString(getDiskBalancer().getBandwidth());
     default:
       LOG.error("Disk Balancer - Unknown key in get balancer setting. Key: {}",
           key);
@@ -3605,5 +3608,12 @@ public class DataNode extends ReconfigurableBase
       volumeInfoList.add(dnStorageInfo);
     }
     return volumeInfoList;
+  }
+
+  private DiskBalancer getDiskBalancer() throws IOException {
+    if (this.diskBalancer == null) {
+      throw new IOException("DiskBalancer is not initialized");
+    }
+    return this.diskBalancer;
   }
 }

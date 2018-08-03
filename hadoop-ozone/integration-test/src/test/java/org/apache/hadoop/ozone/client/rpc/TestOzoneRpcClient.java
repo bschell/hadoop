@@ -19,6 +19,7 @@
 package org.apache.hadoop.ozone.client.rpc;
 
 import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.RandomUtils;
 import org.apache.hadoop.fs.StorageType;
 import org.apache.hadoop.hdds.scm.container.common.helpers.ContainerInfo;
 import org.apache.hadoop.ozone.MiniOzoneCluster;
@@ -39,10 +40,10 @@ import org.apache.hadoop.hdds.client.ReplicationType;
 import org.apache.hadoop.ozone.client.VolumeArgs;
 import org.apache.hadoop.ozone.client.io.OzoneInputStream;
 import org.apache.hadoop.ozone.client.io.OzoneOutputStream;
-import org.apache.hadoop.ozone.ksm.KeySpaceManager;
-import org.apache.hadoop.ozone.ksm.helpers.KsmKeyArgs;
-import org.apache.hadoop.ozone.ksm.helpers.KsmKeyInfo;
-import org.apache.hadoop.ozone.ksm.helpers.KsmKeyLocationInfo;
+import org.apache.hadoop.ozone.om.OzoneManager;
+import org.apache.hadoop.ozone.om.helpers.OmKeyArgs;
+import org.apache.hadoop.ozone.om.helpers.OmKeyInfo;
+import org.apache.hadoop.ozone.om.helpers.OmKeyLocationInfo;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.ozone.client.rest.OzoneException;
 import org.apache.hadoop.hdds.scm.ScmConfigKeys;
@@ -73,7 +74,7 @@ public class TestOzoneRpcClient {
   private static MiniOzoneCluster cluster = null;
   private static OzoneClient ozClient = null;
   private static ObjectStore store = null;
-  private static KeySpaceManager keySpaceManager;
+  private static OzoneManager ozoneManager;
   private static StorageContainerLocationProtocolClientSideTranslatorPB
       storageContainerLocationClient;
 
@@ -97,7 +98,7 @@ public class TestOzoneRpcClient {
     store = ozClient.getObjectStore();
     storageContainerLocationClient =
         cluster.getStorageContainerLocationClient();
-    keySpaceManager = cluster.getKeySpaceManager();
+    ozoneManager = cluster.getOzoneManager();
   }
 
   @Test
@@ -376,7 +377,7 @@ public class TestOzoneRpcClient {
   private boolean verifyRatisReplication(String volumeName, String bucketName,
       String keyName, ReplicationType type, ReplicationFactor factor)
       throws IOException {
-    KsmKeyArgs keyArgs = new KsmKeyArgs.Builder()
+    OmKeyArgs keyArgs = new OmKeyArgs.Builder()
         .setVolumeName(volumeName)
         .setBucketName(bucketName)
         .setKeyName(keyName)
@@ -385,8 +386,8 @@ public class TestOzoneRpcClient {
         HddsProtos.ReplicationType.valueOf(type.toString());
     HddsProtos.ReplicationFactor replicationFactor =
         HddsProtos.ReplicationFactor.valueOf(factor.getValue());
-    KsmKeyInfo keyInfo = keySpaceManager.lookupKey(keyArgs);
-    for (KsmKeyLocationInfo info:
+    OmKeyInfo keyInfo = ozoneManager.lookupKey(keyArgs);
+    for (OmKeyLocationInfo info:
         keyInfo.getLatestVersionLocations().getLocationList()) {
       ContainerInfo container =
           storageContainerLocationClient.getContainer(info.getContainerID());
@@ -432,6 +433,40 @@ public class TestOzoneRpcClient {
       Assert.assertTrue(key.getModificationTime() >= currentTime);
     }
   }
+
+  @Test
+  public void testValidateBlockLengthWithCommitKey() throws IOException {
+    String volumeName = UUID.randomUUID().toString();
+    String bucketName = UUID.randomUUID().toString();
+
+    String value = RandomStringUtils.random(RandomUtils.nextInt(0,1024));
+    store.createVolume(volumeName);
+    OzoneVolume volume = store.getVolume(volumeName);
+    volume.createBucket(bucketName);
+    OzoneBucket bucket = volume.getBucket(bucketName);
+    String keyName = UUID.randomUUID().toString();
+
+    // create the initial key with size 0, write will allocate the first block.
+    OzoneOutputStream out = bucket.createKey(keyName, 0,
+        ReplicationType.STAND_ALONE, ReplicationFactor.ONE);
+    out.write(value.getBytes());
+    out.close();
+    OmKeyArgs.Builder builder = new OmKeyArgs.Builder();
+    builder.setVolumeName(volumeName).setBucketName(bucketName)
+        .setKeyName(keyName);
+    OmKeyInfo keyInfo = ozoneManager.lookupKey(builder.build());
+
+    List<OmKeyLocationInfo> locationInfoList =
+        keyInfo.getLatestVersionLocations().getBlocksLatestVersionOnly();
+    // LocationList should have only 1 block
+    Assert.assertEquals(1, locationInfoList.size());
+    // make sure the data block size is updated
+    Assert.assertEquals(value.getBytes().length,
+        locationInfoList.get(0).getLength());
+    // make sure the total data size is set correctly
+    Assert.assertEquals(value.getBytes().length, keyInfo.getDataSize());
+  }
+
 
   @Test
   public void testPutKeyRatisOneNode()

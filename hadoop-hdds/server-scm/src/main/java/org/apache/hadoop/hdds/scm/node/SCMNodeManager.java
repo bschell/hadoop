@@ -25,10 +25,7 @@ import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
 import org.apache.hadoop.hdds.scm.VersionInfo;
 import org.apache.hadoop.hdds.scm.container.placement.metrics.SCMNodeMetric;
 import org.apache.hadoop.hdds.scm.container.placement.metrics.SCMNodeStat;
-import org.apache.hadoop.hdds.server.events.Event;
-import org.apache.hadoop.hdds.server.events.EventHandler;
 import org.apache.hadoop.hdds.server.events.EventPublisher;
-import org.apache.hadoop.hdds.server.events.TypedEvent;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.NodeState;
@@ -43,6 +40,7 @@ import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.SCMVersionRequestProto;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.metrics2.util.MBeans;
+import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.protocol.StorageContainerNodeProtocol;
 import org.apache.hadoop.ozone.protocol.VersionResponse;
 import org.apache.hadoop.ozone.protocol.commands.CommandForDatanode;
@@ -79,8 +77,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * as soon as you read it.
  */
 public class SCMNodeManager
-    implements NodeManager, StorageContainerNodeProtocol,
-    EventHandler<CommandForDatanode> {
+    implements NodeManager, StorageContainerNodeProtocol {
 
   @VisibleForTesting
   static final Logger LOG =
@@ -118,15 +115,13 @@ public class SCMNodeManager
   // Node pool manager.
   private final StorageContainerManager scmManager;
 
-  public static final Event<CommandForDatanode> DATANODE_COMMAND =
-      new TypedEvent<>(CommandForDatanode.class, "DATANODE_COMMAND");
-
   /**
    * Constructs SCM machine Manager.
    */
   public SCMNodeManager(OzoneConfiguration conf, String clusterID,
-      StorageContainerManager scmManager) throws IOException {
-    this.nodeStateManager = new NodeStateManager(conf);
+      StorageContainerManager scmManager, EventPublisher eventPublisher)
+      throws IOException {
+    this.nodeStateManager = new NodeStateManager(conf, eventPublisher);
     this.nodeStats = new ConcurrentHashMap<>();
     this.scmStat = new SCMNodeStat();
     this.clusterID = clusterID;
@@ -347,6 +342,10 @@ public class SCMNodeManager
   public VersionResponse getVersion(SCMVersionRequestProto versionRequest) {
     return VersionResponse.newBuilder()
         .setVersion(this.version.getVersion())
+        .addValue(OzoneConsts.SCM_ID,
+            this.scmManager.getScmStorage().getScmId())
+        .addValue(OzoneConsts.CLUSTER_ID, this.scmManager.getScmStorage()
+            .getClusterID())
         .build();
   }
 
@@ -366,15 +365,11 @@ public class SCMNodeManager
   public RegisteredCommand register(
       DatanodeDetails datanodeDetails, NodeReportProto nodeReport) {
 
-    String hostname = null;
-    String ip = null;
     InetAddress dnAddress = Server.getRemoteIp();
     if (dnAddress != null) {
       // Mostly called inside an RPC, update ip and peer hostname
-      hostname = dnAddress.getHostName();
-      ip = dnAddress.getHostAddress();
-      datanodeDetails.setHostName(hostname);
-      datanodeDetails.setIpAddress(ip);
+      datanodeDetails.setHostName(dnAddress.getHostName());
+      datanodeDetails.setIpAddress(dnAddress.getHostAddress());
     }
     UUID dnId = datanodeDetails.getUuid();
     try {
@@ -392,14 +387,12 @@ public class SCMNodeManager
       LOG.trace("Datanode is already registered. Datanode: {}",
           datanodeDetails.toString());
     }
-    RegisteredCommand.Builder builder =
-        RegisteredCommand.newBuilder().setErrorCode(ErrorCode.success)
-            .setDatanodeUUID(datanodeDetails.getUuidString())
-            .setClusterID(this.clusterID);
-    if (hostname != null && ip != null) {
-      builder.setHostname(hostname).setIpAddress(ip);
-    }
-    return builder.build();
+    return RegisteredCommand.newBuilder().setErrorCode(ErrorCode.success)
+        .setDatanodeUUID(datanodeDetails.getUuidString())
+        .setClusterID(this.clusterID)
+        .setHostname(datanodeDetails.getHostName())
+        .setIpAddress(datanodeDetails.getIpAddress())
+        .build();
   }
 
   /**
@@ -422,6 +415,17 @@ public class SCMNodeManager
           new ReregisterCommand());
     }
     return commandQueue.getCommand(datanodeDetails.getUuid());
+  }
+
+  /**
+   * Process node report.
+   *
+   * @param dnUuid
+   * @param nodeReport
+   */
+  @Override
+  public void processNodeReport(UUID dnUuid, NodeReportProto nodeReport) {
+    this.updateNodeStat(dnUuid, nodeReport);
   }
 
   /**
@@ -461,14 +465,25 @@ public class SCMNodeManager
     return nodeCountMap;
   }
 
+  // TODO:
+  // Since datanode commands are added through event queue, onMessage method
+  // should take care of adding commands to command queue.
+  // Refactor and remove all the usage of this method and delete this method.
   @Override
   public void addDatanodeCommand(UUID dnId, SCMCommand command) {
     this.commandQueue.addCommand(dnId, command);
   }
 
+  /**
+   * This method is called by EventQueue whenever someone adds a new
+   * DATANODE_COMMAND to the Queue.
+   *
+   * @param commandForDatanode DatanodeCommand
+   * @param ignored publisher
+   */
   @Override
   public void onMessage(CommandForDatanode commandForDatanode,
-      EventPublisher publisher) {
+      EventPublisher ignored) {
     addDatanodeCommand(commandForDatanode.getDatanodeId(),
         commandForDatanode.getCommand());
   }

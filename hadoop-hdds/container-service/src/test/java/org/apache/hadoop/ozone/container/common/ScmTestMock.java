@@ -18,6 +18,8 @@ package org.apache.hadoop.ozone.container.common;
 
 import com.google.common.base.Preconditions;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos;
+import org.apache.hadoop.hdds.protocol.proto.
+    StorageContainerDatanodeProtocolProtos.CommandStatus;
 import org.apache.hadoop.hdds.scm.VersionInfo;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.DatanodeDetailsProto;
@@ -38,6 +40,7 @@ import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.NodeReportProto;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.StorageReportProto;
+import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.protocol.StorageContainerDatanodeProtocol;
 import org.apache.hadoop.ozone.protocol.VersionResponse;
 
@@ -53,11 +56,21 @@ public class ScmTestMock implements StorageContainerDatanodeProtocol {
   private AtomicInteger heartbeatCount = new AtomicInteger(0);
   private AtomicInteger rpcCount = new AtomicInteger(0);
   private AtomicInteger containerReportsCount = new AtomicInteger(0);
+  private String clusterId;
+  private String scmId;
+
+  public ScmTestMock() {
+    clusterId = UUID.randomUUID().toString();
+    scmId = UUID.randomUUID().toString();
+  }
 
   // Map of datanode to containers
   private Map<DatanodeDetails, Map<String, ContainerInfo>> nodeContainers =
       new HashMap();
   private Map<DatanodeDetails, NodeReportProto> nodeReports = new HashMap<>();
+  private AtomicInteger commandStatusReport = new AtomicInteger(0);
+  private List<CommandStatus> cmdStatusList = new LinkedList<>();
+  private List<SCMCommandProto> scmCommandRequests = new LinkedList<>();
   /**
    * Returns the number of heartbeats made to this class.
    *
@@ -151,7 +164,10 @@ public class ScmTestMock implements StorageContainerDatanodeProtocol {
     return VersionResponse.newBuilder()
         .setVersion(versionInfo.getVersion())
         .addValue(VersionInfo.DESCRIPTION_KEY, versionInfo.getDescription())
+        .addValue(OzoneConsts.SCM_ID, scmId)
+        .addValue(OzoneConsts.CLUSTER_ID, clusterId)
         .build().getProtobufMessage();
+
   }
 
   private void sleepIfNeeded() {
@@ -176,10 +192,12 @@ public class ScmTestMock implements StorageContainerDatanodeProtocol {
       sendHeartbeat(SCMHeartbeatRequestProto heartbeat) throws IOException {
     rpcCount.incrementAndGet();
     heartbeatCount.incrementAndGet();
+    if(heartbeat.hasCommandStatusReport()){
+      cmdStatusList.addAll(heartbeat.getCommandStatusReport().getCmdStatusList());
+      commandStatusReport.incrementAndGet();
+    }
     sleepIfNeeded();
-    List<SCMCommandProto>
-        cmdResponses = new LinkedList<>();
-    return SCMHeartbeatResponseProto.newBuilder().addAllCommands(cmdResponses)
+    return SCMHeartbeatResponseProto.newBuilder().addAllCommands(scmCommandRequests)
         .setDatanodeUUID(heartbeat.getDatanodeDetails().getUuid())
         .build();
   }
@@ -297,5 +315,41 @@ public class ScmTestMock implements StorageContainerDatanodeProtocol {
     containerReportsCount.set(0);
     nodeContainers.clear();
 
+  }
+
+  public int getCommandStatusReportCount() {
+    return commandStatusReport.get();
+  }
+
+  public List<CommandStatus> getCmdStatusList() {
+    return cmdStatusList;
+  }
+
+  public List<SCMCommandProto> getScmCommandRequests() {
+    return scmCommandRequests;
+  }
+
+  public void clearScmCommandRequests() {
+    scmCommandRequests.clear();
+  }
+
+  public void addScmCommandRequest(SCMCommandProto scmCmd) {
+    scmCommandRequests.add(scmCmd);
+  }
+
+  /**
+   * Set scmId.
+   * @param id
+   */
+  public void setScmId(String id) {
+    this.scmId = id;
+  }
+
+  /**
+   * Set scmId.
+   * @return scmId
+   */
+  public String getScmId() {
+    return scmId;
   }
 }

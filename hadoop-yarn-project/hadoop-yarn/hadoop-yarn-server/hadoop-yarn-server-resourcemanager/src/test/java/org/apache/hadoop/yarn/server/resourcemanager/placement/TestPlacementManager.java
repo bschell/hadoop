@@ -39,6 +39,7 @@ import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.T
 public class TestPlacementManager {
 
   public static final String USER = "user_";
+  public static final String APP_NAME = "DistributedShell";
   public static final String APP_ID1 = "1";
   public static final String USER1 = USER + APP_ID1;
   public static final String APP_ID2 = "2";
@@ -82,31 +83,25 @@ public class TestPlacementManager {
 
     ApplicationSubmissionContext asc = Records.newRecord(
         ApplicationSubmissionContext.class);
-    ApplicationId appId = ApplicationId.newInstance(CLUSTER_TIMESTAMP,
-        Integer.parseInt(APP_ID1));
-    asc.setApplicationId(appId);
+    asc.setQueue(YarnConfiguration.DEFAULT_QUEUE_NAME);
+    asc.setApplicationName(APP_NAME);
 
-    boolean caughtException = false;
-    try{
-      pm.placeApplication(asc, USER2);
-    } catch (Exception e) {
-      caughtException = true;
-    }
-    Assert.assertTrue(caughtException);
-
-    QueueMappingEntity queueMappingEntity = new QueueMappingEntity(APP_ID1,
+    Assert.assertNull("Placement should be null",
+        pm.placeApplication(asc, USER2));
+    QueueMappingEntity queueMappingEntity = new QueueMappingEntity(APP_NAME,
         USER1, PARENT_QUEUE);
 
     AppNameMappingPlacementRule anRule = new AppNameMappingPlacementRule(false,
         Arrays.asList(queueMappingEntity));
     queuePlacementRules.add(anRule);
     pm.updateRules(queuePlacementRules);
-    try{
-      pm.placeApplication(asc, USER2);
+    try {
+      ApplicationPlacementContext pc = pm.placeApplication(asc, USER2);
+      Assert.assertNotNull(pc);
     } catch (Exception e) {
-      caughtException = false;
+      e.printStackTrace();
+      Assert.fail("Exception not expected");
     }
-    Assert.assertFalse(caughtException);
   }
 
 }

@@ -30,6 +30,7 @@ import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.ContainerReportsProto;
+import org.apache.hadoop.hdds.server.events.EventQueue;
 import org.apache.hadoop.ozone.OzoneConfigKeys;
 import org.apache.hadoop.ozone.container.common.SCMTestUtils;
 import org.apache.hadoop.test.GenericTestUtils;
@@ -84,7 +85,8 @@ public class TestContainerMapping {
       throw new IOException("Unable to create test directory path");
     }
     nodeManager = new MockNodeManager(true, 10);
-    mapping = new ContainerMapping(conf, nodeManager, 128);
+    mapping = new ContainerMapping(conf, nodeManager, 128,
+        new EventQueue());
     xceiverClientManager = new XceiverClientManager(conf);
     random = new Random();
   }
@@ -192,7 +194,7 @@ public class TestContainerMapping {
   @Test
   public void testFullContainerReport() throws IOException {
     ContainerInfo info = createContainer();
-    DatanodeDetails datanodeDetails = TestUtils.getDatanodeDetails();
+    DatanodeDetails datanodeDetails = TestUtils.randomDatanodeDetails();
     List<StorageContainerDatanodeProtocolProtos.ContainerInfo> reports =
         new ArrayList<>();
     StorageContainerDatanodeProtocolProtos.ContainerInfo.Builder ciBuilder =
@@ -226,7 +228,7 @@ public class TestContainerMapping {
   @Test
   public void testContainerCloseWithContainerReport() throws IOException {
     ContainerInfo info = createContainer();
-    DatanodeDetails datanodeDetails = TestUtils.getDatanodeDetails();
+    DatanodeDetails datanodeDetails = TestUtils.randomDatanodeDetails();
     List<StorageContainerDatanodeProtocolProtos.ContainerInfo> reports =
         new ArrayList<>();
 

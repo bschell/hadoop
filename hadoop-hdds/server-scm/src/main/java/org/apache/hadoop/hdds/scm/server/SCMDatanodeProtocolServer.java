@@ -91,9 +91,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_DATANODE_ADDRESS_KEY;
@@ -133,7 +133,8 @@ public class SCMDatanodeProtocolServer implements
         conf.getInt(OZONE_SCM_HANDLER_COUNT_KEY,
             OZONE_SCM_HANDLER_COUNT_DEFAULT);
 
-    heartbeatDispatcher = new SCMDatanodeHeartbeatDispatcher(eventPublisher);
+    heartbeatDispatcher = new SCMDatanodeHeartbeatDispatcher(
+        scm.getScmNodeManager(), eventPublisher);
 
     RPC.setProtocolEngine(conf, StorageContainerDatanodeProtocolPB.class,
         ProtobufRpcEngine.class);
@@ -214,22 +215,13 @@ public class SCMDatanodeProtocolServer implements
 
   @Override
   public SCMHeartbeatResponseProto sendHeartbeat(
-      SCMHeartbeatRequestProto heartbeat)
-      throws IOException {
-    heartbeatDispatcher.dispatch(heartbeat);
-
-    // TODO: Remove the below code after SCM refactoring.
-    DatanodeDetails datanodeDetails = DatanodeDetails
-        .getFromProtoBuf(heartbeat.getDatanodeDetails());
-    NodeReportProto nodeReport = heartbeat.getNodeReport();
-    List<SCMCommand> commands =
-        scm.getScmNodeManager().processHeartbeat(datanodeDetails);
+      SCMHeartbeatRequestProto heartbeat) throws IOException {
     List<SCMCommandProto> cmdResponses = new LinkedList<>();
-    for (SCMCommand cmd : commands) {
+    for (SCMCommand cmd : heartbeatDispatcher.dispatch(heartbeat)) {
       cmdResponses.add(getCommandResponse(cmd));
     }
     return SCMHeartbeatResponseProto.newBuilder()
-        .setDatanodeUUID(datanodeDetails.getUuidString())
+        .setDatanodeUUID(heartbeat.getDatanodeDetails().getUuid())
         .addAllCommands(cmdResponses).build();
   }
 
@@ -238,21 +230,8 @@ public class SCMDatanodeProtocolServer implements
       ContainerBlocksDeletionACKProto acks) throws IOException {
     if (acks.getResultsCount() > 0) {
       List<DeleteBlockTransactionResult> resultList = acks.getResultsList();
-      for (DeleteBlockTransactionResult result : resultList) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Got block deletion ACK from datanode, TXIDs={}, "
-              + "success={}", result.getTxID(), result.getSuccess());
-        }
-        if (result.getSuccess()) {
-          LOG.debug("Purging TXID={} from block deletion log",
-              result.getTxID());
-          scm.getScmBlockManager().getDeletedBlockLog()
-              .commitTransactions(Collections.singletonList(result.getTxID()));
-        } else {
-          LOG.warn("Got failed ACK for TXID={}, prepare to resend the "
-              + "TX in next interval", result.getTxID());
-        }
-      }
+      scm.getScmBlockManager().getDeletedBlockLog()
+          .commitTransactions(resultList, UUID.fromString(acks.getDnId()));
     }
     return ContainerBlocksDeletionACKResponseProto.newBuilder()
         .getDefaultInstanceForType();

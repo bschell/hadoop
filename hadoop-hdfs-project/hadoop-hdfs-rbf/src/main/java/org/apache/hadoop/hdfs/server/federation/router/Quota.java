@@ -67,6 +67,9 @@ public class Quota {
   public void setQuota(String path, long namespaceQuota,
       long storagespaceQuota, StorageType type) throws IOException {
     rpcServer.checkOperation(OperationCategory.WRITE);
+    if (!router.isQuotaEnabled()) {
+      throw new IOException("The quota system is disabled in Router.");
+    }
 
     // Set quota for current path and its children mount table path.
     final List<RemoteLocation> locations = getQuotaRemoteLocations(path);
@@ -91,6 +94,11 @@ public class Quota {
    * @throws IOException
    */
   public QuotaUsage getQuotaUsage(String path) throws IOException {
+    rpcServer.checkOperation(OperationCategory.READ);
+    if (!router.isQuotaEnabled()) {
+      throw new IOException("The quota system is disabled in Router.");
+    }
+
     final List<RemoteLocation> quotaLocs = getValidQuotaLocations(path);
     RemoteMethod method = new RemoteMethod("getQuotaUsage",
         new Class<?>[] {String.class}, new RemoteParam());
@@ -154,6 +162,8 @@ public class Quota {
   private QuotaUsage aggregateQuota(Map<RemoteLocation, QuotaUsage> results) {
     long nsCount = 0;
     long ssCount = 0;
+    long nsQuota = HdfsConstants.QUOTA_RESET;
+    long ssQuota = HdfsConstants.QUOTA_RESET;
     boolean hasQuotaUnSet = false;
 
     for (Map.Entry<RemoteLocation, QuotaUsage> entry : results.entrySet()) {
@@ -165,6 +175,8 @@ public class Quota {
         if (usage.getQuota() == -1 && usage.getSpaceQuota() == -1) {
           hasQuotaUnSet = true;
         }
+        nsQuota = usage.getQuota();
+        ssQuota = usage.getSpaceQuota();
 
         nsCount += usage.getFileAndDirectoryCount();
         ssCount += usage.getSpaceConsumed();
@@ -179,7 +191,10 @@ public class Quota {
     QuotaUsage.Builder builder = new QuotaUsage.Builder()
         .fileAndDirectoryCount(nsCount).spaceConsumed(ssCount);
     if (hasQuotaUnSet) {
-      builder.quota(HdfsConstants.QUOTA_DONT_SET);
+      builder.quota(HdfsConstants.QUOTA_RESET)
+          .spaceQuota(HdfsConstants.QUOTA_RESET);
+    } else {
+      builder.quota(nsQuota).spaceQuota(ssQuota);
     }
 
     return builder.build();

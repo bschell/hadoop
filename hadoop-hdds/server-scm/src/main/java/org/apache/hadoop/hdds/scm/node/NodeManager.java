@@ -17,12 +17,15 @@
  */
 package org.apache.hadoop.hdds.scm.node;
 
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.NodeReportProto;
 import org.apache.hadoop.hdds.scm.container.placement.metrics.SCMNodeMetric;
 import org.apache.hadoop.hdds.scm.container.placement.metrics.SCMNodeStat;
 import org.apache.hadoop.hdds.scm.node.states.NodeNotFoundException;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.NodeState;
+import org.apache.hadoop.hdds.server.events.EventHandler;
 import org.apache.hadoop.ozone.protocol.StorageContainerNodeProtocol;
+import org.apache.hadoop.ozone.protocol.commands.CommandForDatanode;
 import org.apache.hadoop.ozone.protocol.commands.SCMCommand;
 
 import java.io.Closeable;
@@ -53,7 +56,7 @@ import java.util.UUID;
  * list, by calling removeNode. We will throw away this nodes info soon.
  */
 public interface NodeManager extends StorageContainerNodeProtocol,
-    NodeManagerMXBean, Closeable {
+    EventHandler<CommandForDatanode>, NodeManagerMXBean, Closeable {
   /**
    * Removes a data node from the management of this Node Manager.
    *
@@ -136,4 +139,12 @@ public interface NodeManager extends StorageContainerNodeProtocol,
    * @param command
    */
   void addDatanodeCommand(UUID dnId, SCMCommand command);
+
+  /**
+   * Process node report.
+   *
+   * @param dnUuid
+   * @param nodeReport
+   */
+  void processNodeReport(UUID dnUuid, NodeReportProto nodeReport);
 }

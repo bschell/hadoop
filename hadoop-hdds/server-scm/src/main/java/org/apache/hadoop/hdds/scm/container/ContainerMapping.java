@@ -38,6 +38,7 @@ import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.ContainerReportsProto;
+import org.apache.hadoop.hdds.server.events.EventPublisher;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.lease.Lease;
 import org.apache.hadoop.ozone.lease.LeaseException;
@@ -104,7 +105,7 @@ public class ContainerMapping implements Mapping {
   @SuppressWarnings("unchecked")
   public ContainerMapping(
       final Configuration conf, final NodeManager nodeManager, final int
-      cacheSizeMB) throws IOException {
+      cacheSizeMB, EventPublisher eventPublisher) throws IOException {
     this.nodeManager = nodeManager;
     this.cacheSize = cacheSizeMB;
     this.closer = new ContainerCloser(nodeManager, conf);
@@ -122,13 +123,14 @@ public class ContainerMapping implements Mapping {
 
     this.lock = new ReentrantLock();
 
-    this.pipelineSelector = new PipelineSelector(nodeManager, conf);
-
     // To be replaced with code getStorageSize once it is committed.
     size = conf.getLong(OZONE_SCM_CONTAINER_SIZE_GB,
         OZONE_SCM_CONTAINER_SIZE_DEFAULT) * 1024 * 1024 * 1024;
     this.containerStateManager =
         new ContainerStateManager(conf, this);
+
+    this.pipelineSelector = new PipelineSelector(nodeManager,
+        containerStateManager, conf, eventPublisher);
 
     this.containerCloseThreshold = conf.getFloat(
         ScmConfigKeys.OZONE_SCM_CONTAINER_CLOSE_THRESHOLD,
@@ -139,8 +141,8 @@ public class ContainerMapping implements Mapping {
         ScmConfigKeys.OZONE_SCM_CONTAINER_CREATION_LEASE_TIMEOUT,
         ScmConfigKeys.OZONE_SCM_CONTAINER_CREATION_LEASE_TIMEOUT_DEFAULT,
         TimeUnit.MILLISECONDS);
-    LOG.trace("Starting Container Lease Manager.");
-    containerLeaseManager = new LeaseManager<>(containerCreationLeaseTimeout);
+    containerLeaseManager = new LeaseManager<>("ContainerCreation",
+        containerCreationLeaseTimeout);
     containerLeaseManager.start();
   }
 
@@ -372,6 +374,12 @@ public class ContainerMapping implements Mapping {
       // Like releasing the lease in case of BEGIN_CREATE.
       ContainerInfo updatedContainer = containerStateManager
           .updateContainerState(containerInfo, event);
+      if (!updatedContainer.isContainerOpen()) {
+        Pipeline pipeline = pipelineSelector
+            .getPipeline(containerInfo.getPipelineName(),
+                containerInfo.getReplicationType());
+        pipelineSelector.closePipelineIfNoOpenContainers(pipeline);
+      }
       containerStore.put(dbKey, updatedContainer.getProtobuf().toByteArray());
       return updatedContainer.getState();
     } catch (LeaseException e) {
@@ -446,7 +454,7 @@ public class ContainerMapping implements Mapping {
         .getPipeline(containerInfo.getPipelineName(),
             containerInfo.getReplicationType());
     if (pipeline == null) {
-      pipelineSelector
+      pipeline = pipelineSelector
           .getReplicationPipeline(containerInfo.getReplicationType(),
               containerInfo.getReplicationFactor());
     }
@@ -477,7 +485,7 @@ public class ContainerMapping implements Mapping {
     List<StorageContainerDatanodeProtocolProtos.ContainerInfo>
         containerInfos = reports.getReportsList();
 
-     for (StorageContainerDatanodeProtocolProtos.ContainerInfo datanodeState :
+    for (StorageContainerDatanodeProtocolProtos.ContainerInfo datanodeState :
         containerInfos) {
       byte[] dbKey = Longs.toByteArray(datanodeState.getContainerID());
       lock.lock();
@@ -498,7 +506,9 @@ public class ContainerMapping implements Mapping {
           containerStore.put(dbKey, newState.toByteArray());
 
           // If the container is closed, then state is already written to SCM
-          Pipeline pipeline = pipelineSelector.getPipeline(newState.getPipelineName(), newState.getReplicationType());
+          Pipeline pipeline =
+              pipelineSelector.getPipeline(newState.getPipelineName(),
+                  newState.getReplicationType());
           if(pipeline == null) {
             pipeline = pipelineSelector
                 .getReplicationPipeline(newState.getReplicationType(),
@@ -656,6 +666,10 @@ public class ContainerMapping implements Mapping {
     if (containerStore != null) {
       containerStore.close();
     }
+
+    if (pipelineSelector != null) {
+      pipelineSelector.shutdown();
+    }
   }
 
   /**
@@ -709,13 +723,13 @@ public class ContainerMapping implements Mapping {
     }
   }
 
-  @Override
-  public NodeManager getNodeManager() {
-    return nodeManager;
-  }
-
   @VisibleForTesting
   public MetadataStore getContainerStore() {
     return containerStore;
+  }
+
+  @VisibleForTesting
+  public PipelineSelector getPipelineSelector() {
+    return pipelineSelector;
   }
 }

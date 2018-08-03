@@ -18,6 +18,12 @@
 package org.apache.hadoop.ozone.genesis;
 
 import org.apache.hadoop.hdds.scm.container.common.helpers.Pipeline;
+import org.apache.hadoop.ozone.container.common.impl.ContainerSet;
+import org.apache.hadoop.ozone.container.common.impl.HddsDispatcher;
+import org.apache.hadoop.ozone.container.common.statemachine
+    .DatanodeStateMachine.DatanodeStates;
+import org.apache.hadoop.ozone.container.common.statemachine.StateContext;
+import org.apache.hadoop.ozone.container.common.volume.VolumeSet;
 import org.apache.ratis.shaded.com.google.protobuf.ByteString;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.io.FileUtils;
@@ -25,13 +31,7 @@ import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.client.BlockID;
-import org.apache.hadoop.hdfs.server.datanode.StorageLocation;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
-import org.apache.hadoop.ozone.container.common.impl.ChunkManagerImpl;
-import org.apache.hadoop.ozone.container.common.impl.ContainerManagerImpl;
-import org.apache.hadoop.ozone.container.common.impl.Dispatcher;
-import org.apache.hadoop.ozone.container.common.impl.KeyManagerImpl;
-import org.apache.hadoop.ozone.container.common.interfaces.ContainerManager;
 
 import org.apache.hadoop.util.Time;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -44,19 +44,15 @@ import org.openjdk.jmh.annotations.TearDown;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.apache.hadoop.ozone.OzoneConsts.CONTAINER_ROOT_PREFIX;
 
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.LifeCycleState;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .ContainerCommandRequestProto;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
-    .CreateContainerRequestProto;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .ReadChunkRequestProto;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
@@ -65,8 +61,6 @@ import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .PutKeyRequestProto;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .GetKeyRequestProto;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
-    .ContainerData;
 
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationType;
@@ -77,8 +71,8 @@ public class BenchMarkDatanodeDispatcher {
 
   private String baseDir;
   private String datanodeUuid;
-  private Dispatcher dispatcher;
   private Pipeline pipeline;
+  private HddsDispatcher dispatcher;
   private ByteString data;
   private Random random;
   private AtomicInteger containerCount;
@@ -104,24 +98,17 @@ public class BenchMarkDatanodeDispatcher {
     data = ByteString.copyFromUtf8(RandomStringUtils.randomAscii(1048576));
     random  = new Random();
     Configuration conf = new OzoneConfiguration();
-    ContainerManager manager = new ContainerManagerImpl();
     baseDir = System.getProperty("java.io.tmpdir") + File.separator +
         datanodeUuid;
 
     // data directory
     conf.set("dfs.datanode.data.dir", baseDir + File.separator + "data");
 
-    // metadata directory
-    StorageLocation metadataDir = StorageLocation.parse(
-        baseDir+ File.separator + CONTAINER_ROOT_PREFIX);
-    List<StorageLocation> locations = Arrays.asList(metadataDir);
+    ContainerSet containerSet = new ContainerSet();
+    VolumeSet volumeSet = new VolumeSet(datanodeUuid, conf);
 
-    manager
-        .init(conf, locations, GenesisUtil.createDatanodeDetails(datanodeUuid));
-    manager.setChunkManager(new ChunkManagerImpl(manager));
-    manager.setKeyManager(new KeyManagerImpl(manager, conf));
-
-    dispatcher = new Dispatcher(manager, conf);
+    dispatcher = new HddsDispatcher(conf, containerSet, volumeSet,
+        new StateContext(conf, DatanodeStates.RUNNING, null));
     dispatcher.init();
 
     containerCount = new AtomicInteger();
@@ -171,17 +158,14 @@ public class BenchMarkDatanodeDispatcher {
     FileUtils.deleteDirectory(new File(baseDir));
   }
 
-  private ContainerCommandRequestProto getCreateContainerCommand(long containerID) {
-    CreateContainerRequestProto.Builder createRequest =
-        CreateContainerRequestProto.newBuilder();
-    createRequest.setContainerData(
-        ContainerData.newBuilder().setContainerID(
-            containerID).build());
-
+  private ContainerCommandRequestProto getCreateContainerCommand(
+      long containerID) {
     ContainerCommandRequestProto.Builder request =
         ContainerCommandRequestProto.newBuilder();
     request.setCmdType(ContainerProtos.Type.CreateContainer);
-    request.setCreateContainer(createRequest);
+    request.setContainerID(containerID);
+    request.setCreateContainer(
+        ContainerProtos.CreateContainerRequestProto.getDefaultInstance());
     request.setDatanodeUuid(datanodeUuid);
     request.setTraceID(containerID + "-trace");
     return request.build();
@@ -198,6 +182,7 @@ public class BenchMarkDatanodeDispatcher {
     ContainerCommandRequestProto.Builder request = ContainerCommandRequestProto
         .newBuilder();
     request.setCmdType(ContainerProtos.Type.WriteChunk)
+        .setContainerID(blockID.getContainerID())
         .setTraceID(getBlockTraceID(blockID))
         .setDatanodeUuid(datanodeUuid)
         .setWriteChunk(writeChunkRequest);
@@ -210,9 +195,11 @@ public class BenchMarkDatanodeDispatcher {
         .newBuilder()
         .setBlockID(blockID.getDatanodeBlockIDProtobuf())
         .setChunkData(getChunkInfo(blockID, chunkName));
+
     ContainerCommandRequestProto.Builder request = ContainerCommandRequestProto
         .newBuilder();
     request.setCmdType(ContainerProtos.Type.ReadChunk)
+        .setContainerID(blockID.getContainerID())
         .setTraceID(getBlockTraceID(blockID))
         .setDatanodeUuid(datanodeUuid)
         .setReadChunk(readChunkRequest);
@@ -236,22 +223,24 @@ public class BenchMarkDatanodeDispatcher {
     PutKeyRequestProto.Builder putKeyRequest = PutKeyRequestProto
         .newBuilder()
         .setKeyData(getKeyData(blockID, chunkKey));
+
     ContainerCommandRequestProto.Builder request = ContainerCommandRequestProto
         .newBuilder();
     request.setCmdType(ContainerProtos.Type.PutKey)
+        .setContainerID(blockID.getContainerID())
         .setTraceID(getBlockTraceID(blockID))
         .setDatanodeUuid(datanodeUuid)
         .setPutKey(putKeyRequest);
     return request.build();
   }
 
-  private ContainerCommandRequestProto getGetKeyCommand(
-      BlockID blockID, String chunkKey) {
+  private ContainerCommandRequestProto getGetKeyCommand(BlockID blockID) {
     GetKeyRequestProto.Builder readKeyRequest = GetKeyRequestProto.newBuilder()
-        .setKeyData(getKeyData(blockID, chunkKey));
+        .setBlockID(blockID.getDatanodeBlockIDProtobuf());
     ContainerCommandRequestProto.Builder request = ContainerCommandRequestProto
         .newBuilder()
         .setCmdType(ContainerProtos.Type.GetKey)
+        .setContainerID(blockID.getContainerID())
         .setTraceID(getBlockTraceID(blockID))
         .setDatanodeUuid(datanodeUuid)
         .setGetKey(readKeyRequest);
@@ -300,8 +289,7 @@ public class BenchMarkDatanodeDispatcher {
   @Benchmark
   public void getKey(BenchMarkDatanodeDispatcher bmdd) {
     BlockID blockID = getRandomBlockID();
-    String chunkKey = getNewChunkToWrite();
-    bmdd.dispatcher.dispatch(getGetKeyCommand(blockID, chunkKey));
+    bmdd.dispatcher.dispatch(getGetKeyCommand(blockID));
   }
 
   // Chunks writes from benchmark only reaches certain containers

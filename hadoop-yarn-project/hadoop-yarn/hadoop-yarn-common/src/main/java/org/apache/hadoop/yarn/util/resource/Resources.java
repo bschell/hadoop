@@ -21,11 +21,12 @@ package org.apache.hadoop.yarn.util.resource;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceInformation;
+import org.apache.hadoop.yarn.api.records.impl.LightWeightResource;
 import org.apache.hadoop.yarn.exceptions.ResourceNotFoundException;
-import org.apache.hadoop.yarn.util.UnitsConversionUtil;
 
 /**
  * Resources is a computation class which provides a set of apis to do
@@ -39,10 +40,29 @@ public class Resources {
       LogFactory.getLog(Resources.class);
 
   /**
+   * Return a new {@link Resource} instance with all resource values
+   * initialized to {@code value}.
+   * @param value the value to use for all resources
+   * @return a new {@link Resource} instance
+   */
+  @Private
+  @Unstable
+  public static Resource createResourceWithSameValue(long value) {
+    LightWeightResource res = new LightWeightResource(value,
+            Long.valueOf(value).intValue());
+    int numberOfResources = ResourceUtils.getNumberOfKnownResourceTypes();
+    for (int i = 2; i < numberOfResources; i++) {
+      res.setResourceValue(i, value);
+    }
+
+    return res;
+  }
+
+  /**
    * Helper class to create a resource with a fixed value for all resource
    * types. For example, a NONE resource which returns 0 for any resource type.
    */
-  @InterfaceAudience.Private
+  @Private
   @Unstable
   static class FixedValueResource extends Resource {
 
@@ -107,14 +127,12 @@ public class Resources {
 
     @Override
     public void setResourceInformation(String resource,
-        ResourceInformation resourceInformation)
-        throws ResourceNotFoundException {
+        ResourceInformation resourceInformation) {
       throw new RuntimeException(name + " cannot be modified!");
     }
 
     @Override
-    public void setResourceValue(String resource, long value)
-        throws ResourceNotFoundException {
+    public void setResourceValue(String resource, long value) {
       throw new RuntimeException(name + " cannot be modified!");
     }
 
@@ -223,7 +241,7 @@ public class Resources {
   public static boolean isNone(Resource other) {
     return NONE.equals(other);
   }
-  
+
   public static Resource unbounded() {
     return UNBOUNDED;
   }
@@ -238,12 +256,7 @@ public class Resources {
       try {
         ResourceInformation rhsValue = rhs.getResourceInformation(i);
         ResourceInformation lhsValue = lhs.getResourceInformation(i);
-
-        long convertedRhs = (rhsValue.getUnits().equals(lhsValue.getUnits()))
-            ? rhsValue.getValue()
-            : UnitsConversionUtil.convert(rhsValue.getUnits(),
-                lhsValue.getUnits(), rhsValue.getValue());
-        lhs.setResourceValue(i, lhsValue.getValue() + convertedRhs);
+        lhs.setResourceValue(i, lhsValue.getValue() + rhsValue.getValue());
       } catch (ResourceNotFoundException ye) {
         LOG.warn("Resource is missing:" + ye.getMessage());
         continue;
@@ -262,12 +275,7 @@ public class Resources {
       try {
         ResourceInformation rhsValue = rhs.getResourceInformation(i);
         ResourceInformation lhsValue = lhs.getResourceInformation(i);
-
-        long convertedRhs = (rhsValue.getUnits().equals(lhsValue.getUnits()))
-            ? rhsValue.getValue()
-            : UnitsConversionUtil.convert(rhsValue.getUnits(),
-                lhsValue.getUnits(), rhsValue.getValue());
-        lhs.setResourceValue(i, lhsValue.getValue() - convertedRhs);
+        lhs.setResourceValue(i, lhsValue.getValue() - rhsValue.getValue());
       } catch (ResourceNotFoundException ye) {
         LOG.warn("Resource is missing:" + ye.getMessage());
         continue;
@@ -281,8 +289,9 @@ public class Resources {
   }
 
   /**
-   * Subtract <code>rhs</code> from <code>lhs</code> and reset any negative
-   * values to zero.
+   * Subtract {@code rhs} from {@code lhs} and reset any negative values to
+   * zero. This call will modify {@code lhs}.
+   *
    * @param lhs {@link Resource} to subtract from
    * @param rhs {@link Resource} to subtract
    * @return the value of lhs after subtraction
@@ -296,6 +305,19 @@ public class Resources {
       lhs.setVirtualCores(0);
     }
     return lhs;
+  }
+
+  /**
+   * Subtract {@code rhs} from {@code lhs} and reset any negative values to
+   * zero. This call will operate on a copy of {@code lhs}, leaving {@code lhs}
+   * unmodified.
+   *
+   * @param lhs {@link Resource} to subtract from
+   * @param rhs {@link Resource} to subtract
+   * @return the value of lhs after subtraction
+   */
+  public static Resource subtractNonNegative(Resource lhs, Resource rhs) {
+    return subtractFromNonNegative(clone(lhs), rhs);
   }
 
   public static Resource negate(Resource resource) {
@@ -332,12 +354,7 @@ public class Resources {
         ResourceInformation rhsValue = rhs.getResourceInformation(i);
         ResourceInformation lhsValue = lhs.getResourceInformation(i);
 
-        long convertedRhs = (long) (((rhsValue.getUnits()
-            .equals(lhsValue.getUnits()))
-                ? rhsValue.getValue()
-                : UnitsConversionUtil.convert(rhsValue.getUnits(),
-                    lhsValue.getUnits(), rhsValue.getValue()))
-            * by);
+        long convertedRhs = (long) (rhsValue.getValue() * by);
         lhs.setResourceValue(i, lhsValue.getValue() + convertedRhs);
       } catch (ResourceNotFoundException ye) {
         LOG.warn("Resource is missing:" + ye.getMessage());
@@ -478,12 +495,7 @@ public class Resources {
       try {
         ResourceInformation rhsValue = bigger.getResourceInformation(i);
         ResourceInformation lhsValue = smaller.getResourceInformation(i);
-
-        long convertedRhs = (rhsValue.getUnits().equals(lhsValue.getUnits()))
-            ? rhsValue.getValue()
-            : UnitsConversionUtil.convert(rhsValue.getUnits(),
-                lhsValue.getUnits(), rhsValue.getValue());
-        if (lhsValue.getValue() > convertedRhs) {
+        if (lhsValue.getValue() > rhsValue.getValue()) {
           return false;
         }
       } catch (ResourceNotFoundException ye) {
@@ -506,12 +518,7 @@ public class Resources {
       try {
         ResourceInformation rhsValue = rhs.getResourceInformation(i);
         ResourceInformation lhsValue = lhs.getResourceInformation(i);
-
-        long convertedRhs = (rhsValue.getUnits().equals(lhsValue.getUnits()))
-            ? rhsValue.getValue()
-            : UnitsConversionUtil.convert(rhsValue.getUnits(),
-                lhsValue.getUnits(), rhsValue.getValue());
-        ResourceInformation outInfo = lhsValue.getValue() < convertedRhs
+        ResourceInformation outInfo = lhsValue.getValue() < rhsValue.getValue()
             ? lhsValue
             : rhsValue;
         ret.setResourceInformation(i, outInfo);
@@ -530,12 +537,7 @@ public class Resources {
       try {
         ResourceInformation rhsValue = rhs.getResourceInformation(i);
         ResourceInformation lhsValue = lhs.getResourceInformation(i);
-
-        long convertedRhs = (rhsValue.getUnits().equals(lhsValue.getUnits()))
-            ? rhsValue.getValue()
-            : UnitsConversionUtil.convert(rhsValue.getUnits(),
-                lhsValue.getUnits(), rhsValue.getValue());
-        ResourceInformation outInfo = lhsValue.getValue() > convertedRhs
+        ResourceInformation outInfo = lhsValue.getValue() > rhsValue.getValue()
             ? lhsValue
             : rhsValue;
         ret.setResourceInformation(i, outInfo);

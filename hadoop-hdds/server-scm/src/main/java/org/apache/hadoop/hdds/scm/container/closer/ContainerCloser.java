@@ -26,7 +26,6 @@ import org.apache.hadoop.hdds.protocol.proto.HddsProtos.SCMContainerInfo;
 import org.apache.hadoop.hdds.scm.container.common.helpers.Pipeline;
 import org.apache.hadoop.hdds.scm.node.NodeManager;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
-import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.ozone.protocol.commands.CloseContainerCommand;
 import org.apache.hadoop.util.Time;
 import org.slf4j.Logger;
@@ -38,10 +37,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.apache.hadoop.ozone.OzoneConfigKeys
-    .OZONE_CONTAINER_REPORT_INTERVAL;
-import static org.apache.hadoop.ozone.OzoneConfigKeys
-    .OZONE_CONTAINER_REPORT_INTERVAL_DEFAULT;
+import static org.apache.hadoop.hdds.HddsConfigKeys
+    .HDDS_CONTAINER_REPORT_INTERVAL;
+import static org.apache.hadoop.hdds.HddsConfigKeys
+    .HDDS_CONTAINER_REPORT_INTERVAL_DEFAULT;
 
 /**
  * A class that manages closing of containers. This allows transition from a
@@ -76,8 +75,8 @@ public class ContainerCloser {
     this.threadRunCount = new AtomicInteger(0);
     this.isRunning = new AtomicBoolean(false);
     this.reportInterval = this.configuration.getTimeDuration(
-        OZONE_CONTAINER_REPORT_INTERVAL,
-        OZONE_CONTAINER_REPORT_INTERVAL_DEFAULT, TimeUnit.SECONDS);
+        HDDS_CONTAINER_REPORT_INTERVAL,
+        HDDS_CONTAINER_REPORT_INTERVAL_DEFAULT, TimeUnit.SECONDS);
     Preconditions.checkState(this.reportInterval > 0,
         "report interval has to be greater than 0");
   }

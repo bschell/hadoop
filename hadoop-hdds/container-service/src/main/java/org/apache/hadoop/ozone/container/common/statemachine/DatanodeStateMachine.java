@@ -21,6 +21,7 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.CommandStatusReportsProto;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.ContainerReportsProto;
 import org.apache.hadoop.hdds.protocol.proto
@@ -88,15 +89,15 @@ public class DatanodeStateMachine implements Closeable {
     heartbeatFrequency = TimeUnit.SECONDS.toMillis(
         getScmHeartbeatInterval(conf));
     container = new OzoneContainer(this.datanodeDetails,
-        new OzoneConfiguration(conf));
+        new OzoneConfiguration(conf), context);
     nextHB = new AtomicLong(Time.monotonicNow());
 
      // When we add new handlers just adding a new handler here should do the
      // trick.
     commandDispatcher = CommandDispatcher.newBuilder()
         .addHandler(new CloseContainerCommandHandler())
-        .addHandler(new DeleteBlocksCommandHandler(
-            container.getContainerManager(), conf))
+        .addHandler(new DeleteBlocksCommandHandler(container.getContainerSet(),
+            conf))
         .addHandler(new ReplicateContainerCommandHandler())
         .setConnectionManager(connectionManager)
         .setContainer(container)
@@ -107,6 +108,7 @@ public class DatanodeStateMachine implements Closeable {
         .setStateContext(context)
         .addPublisherFor(NodeReportProto.class)
         .addPublisherFor(ContainerReportsProto.class)
+        .addPublisherFor(CommandStatusReportsProto.class)
         .build();
   }
 

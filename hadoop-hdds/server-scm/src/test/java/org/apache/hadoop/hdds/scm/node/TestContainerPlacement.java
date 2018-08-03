@@ -34,6 +34,8 @@ import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.StorageReportProto;
+import org.apache.hadoop.hdds.scm.events.SCMEvents;
+import org.apache.hadoop.hdds.server.events.EventQueue;
 import org.apache.hadoop.ozone.OzoneConfigKeys;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.test.PathUtils;
@@ -41,6 +43,7 @@ import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
+import org.mockito.Mockito;
 
 import java.io.File;
 import java.io.IOException;
@@ -86,8 +89,15 @@ public class TestContainerPlacement {
 
   SCMNodeManager createNodeManager(OzoneConfiguration config)
       throws IOException {
+    EventQueue eventQueue = new EventQueue();
+    eventQueue.addHandler(SCMEvents.NEW_NODE,
+        Mockito.mock(NewNodeHandler.class));
+    eventQueue.addHandler(SCMEvents.STALE_NODE,
+        Mockito.mock(StaleNodeHandler.class));
+    eventQueue.addHandler(SCMEvents.DEAD_NODE,
+        Mockito.mock(DeadNodeHandler.class));
     SCMNodeManager nodeManager = new SCMNodeManager(config,
-        UUID.randomUUID().toString(), null);
+        UUID.randomUUID().toString(), null, eventQueue);
     assertFalse("Node manager should be in chill mode",
         nodeManager.isOutOfChillMode());
     return nodeManager;
@@ -95,9 +105,10 @@ public class TestContainerPlacement {
 
   ContainerMapping createContainerManager(Configuration config,
       NodeManager scmNodeManager) throws IOException {
+    EventQueue eventQueue = new EventQueue();
     final int cacheSize = config.getInt(OZONE_SCM_DB_CACHE_SIZE_MB,
         OZONE_SCM_DB_CACHE_SIZE_DEFAULT);
-    return new ContainerMapping(config, scmNodeManager, cacheSize);
+    return new ContainerMapping(config, scmNodeManager, cacheSize, eventQueue);
 
   }
 
@@ -132,10 +143,6 @@ public class TestContainerPlacement {
         TestUtils.getListOfRegisteredDatanodeDetails(nodeManager, nodeCount);
     try {
       for (DatanodeDetails datanodeDetails : datanodes) {
-        String id = UUID.randomUUID().toString();
-        String path = testDir.getAbsolutePath() + "/" + id;
-        List<StorageReportProto> reports = TestUtils
-            .createStorageReport(capacity, used, remaining, path, null, id, 1);
         nodeManager.processHeartbeat(datanodeDetails);
       }
 

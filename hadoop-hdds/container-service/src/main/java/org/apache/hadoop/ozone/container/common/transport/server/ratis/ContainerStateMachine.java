@@ -57,7 +57,7 @@ import java.util.concurrent.ThreadPoolExecutor;
  * requests.
  *
  * Read only requests are classified in
- * {@link org.apache.hadoop.hdds.scm.XceiverClientRatis#isReadOnly}
+ * {@link org.apache.hadoop.hdds.HddsUtils#isReadOnly}
  * and these readonly requests are replied from the {@link #query(Message)}.
  *
  * The write requests can be divided into requests with user data
@@ -84,6 +84,11 @@ import java.util.concurrent.ThreadPoolExecutor;
  * 2) Write chunk commit operation is executed after write chunk state machine
  * operation. This will ensure that commit operation is sync'd with the state
  * machine operation.
+ *
+ * Synchronization between {@link #writeStateMachineData} and
+ * {@link #applyTransaction} need to be enforced in the StateMachine
+ * implementation. For example, synchronization between writeChunk and
+ * createContainer in {@link ContainerStateMachine}.
  * */
 public class ContainerStateMachine extends BaseStateMachine {
   static final Logger LOG = LoggerFactory.getLogger(
@@ -207,13 +212,16 @@ public class ContainerStateMachine extends BaseStateMachine {
 
   private CompletableFuture<Message> handleCreateContainer(
       ContainerCommandRequestProto requestProto) {
-    long containerID =
-        requestProto.getCreateContainer().getContainerData().getContainerID();
+    long containerID = requestProto.getContainerID();
     createContainerFutureMap.
         computeIfAbsent(containerID, k -> new CompletableFuture<>());
     return CompletableFuture.completedFuture(() -> ByteString.EMPTY);
   }
 
+  /*
+   * writeStateMachineData calls are not synchronized with each other
+   * and also with applyTransaction.
+   */
   @Override
   public CompletableFuture<Message> writeStateMachineData(LogEntryProto entry) {
     try {
@@ -245,6 +253,9 @@ public class ContainerStateMachine extends BaseStateMachine {
     }
   }
 
+  /*
+   * ApplyTransaction calls in Ratis are sequential.
+   */
   @Override
   public CompletableFuture<Message> applyTransaction(TransactionContext trx) {
     try {
@@ -264,9 +275,7 @@ public class ContainerStateMachine extends BaseStateMachine {
       } else {
         Message message = runCommand(requestProto);
         if (cmdType == ContainerProtos.Type.CreateContainer) {
-          long containerID =
-              requestProto.getCreateContainer()
-                  .getContainerData().getContainerID();
+          long containerID = requestProto.getContainerID();
           createContainerFutureMap.remove(containerID).complete(message);
         }
         return CompletableFuture.completedFuture(message);

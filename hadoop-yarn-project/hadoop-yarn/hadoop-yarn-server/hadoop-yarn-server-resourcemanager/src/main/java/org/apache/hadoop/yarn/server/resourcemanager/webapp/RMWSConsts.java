@@ -36,11 +36,17 @@ public final class RMWSConsts {
   /** Path for {@code RMWebServiceProtocol#getClusterInfo}. */
   public static final String INFO = "/info";
 
+  /** Path for {@code RMWebServiceProtocol#getClusterUserInfo}. */
+  public static final String CLUSTER_USER_INFO = "/userinfo";
+
   /** Path for {@code RMWebServiceProtocol#getClusterMetricsInfo}. */
   public static final String METRICS = "/metrics";
 
   /** Path for {@code RMWebServiceProtocol#getSchedulerInfo}. */
   public static final String SCHEDULER = "/scheduler";
+
+  /** Path for {@code RMWebServices#updateSchedulerConfiguration}. */
+  public static final String SCHEDULER_CONF = "/scheduler-conf";
 
   /** Path for {@code RMWebServiceProtocol#dumpSchedulerLogs}. */
   public static final String SCHEDULER_LOGS = "/scheduler/logs";

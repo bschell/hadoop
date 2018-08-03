@@ -173,9 +173,17 @@ public class ResourcePBImpl extends Resource {
     ri.setResourceType(entry.hasType()
         ? ProtoUtils.convertFromProtoFormat(entry.getType())
         : ResourceTypes.COUNTABLE);
-    ri.setUnits(
-        entry.hasUnits() ? entry.getUnits() : resourceInformation.getUnits());
-    ri.setValue(entry.hasValue() ? entry.getValue() : 0L);
+    String units = entry.hasUnits() ? entry.getUnits() :
+        ResourceUtils.getDefaultUnit(entry.getKey());
+    long value = entry.hasValue() ? entry.getValue() : 0L;
+    String destUnit = ResourceUtils.getDefaultUnit(entry.getKey());
+    if(!units.equals(destUnit)) {
+      ri.setValue(UnitsConversionUtil.convert(units, destUnit, value));
+      ri.setUnits(destUnit);
+    } else {
+      ri.setUnits(units);
+      ri.setValue(value);
+    }
     return ri;
   }
 
@@ -193,8 +201,7 @@ public class ResourcePBImpl extends Resource {
   }
 
   @Override
-  public void setResourceValue(String resource, long value)
-      throws ResourceNotFoundException {
+  public void setResourceValue(String resource, long value) {
     maybeInitBuilder();
     if (resource == null) {
       throw new IllegalArgumentException("resource type object cannot be null");
@@ -203,14 +210,13 @@ public class ResourcePBImpl extends Resource {
   }
 
   @Override
-  public ResourceInformation getResourceInformation(String resource)
-      throws ResourceNotFoundException {
+  public ResourceInformation getResourceInformation(String resource) {
+    initResources();
     return super.getResourceInformation(resource);
   }
 
   @Override
-  public long getResourceValue(String resource)
-      throws ResourceNotFoundException {
+  public long getResourceValue(String resource) {
     return super.getResourceValue(resource);
   }
 
