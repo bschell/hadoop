@@ -20,34 +20,30 @@ package org.apache.hadoop.ozone.container.common.impl;
 import com.google.common.collect.Maps;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.lang3.RandomUtils;
 import org.apache.hadoop.hdds.client.BlockID;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
-import org.apache.hadoop.hdds.protocol.proto
-    .StorageContainerDatanodeProtocolProtos;
-import org.apache.hadoop.hdds.scm.ScmConfigKeys;
-import org.apache.hadoop.hdfs.server.datanode.StorageLocation;
-import org.apache.hadoop.ozone.OzoneConfigKeys;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
-import org.apache.hadoop.ozone.OzoneConsts;
+import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos;
+import org.apache.hadoop.hdds.scm.ScmConfigKeys;
 import org.apache.hadoop.hdds.scm.container.common.helpers.StorageContainerException;
+import org.apache.hadoop.hdfs.server.datanode.StorageLocation;
+import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.container.ContainerTestHelper;
+import org.apache.hadoop.ozone.container.common.helpers.BlockData;
+import org.apache.hadoop.ozone.container.common.helpers.ChunkInfo;
 import org.apache.hadoop.ozone.container.common.helpers.ContainerUtils;
 import org.apache.hadoop.ozone.container.common.interfaces.Container;
 import org.apache.hadoop.ozone.container.common.interfaces.VolumeChoosingPolicy;
-import org.apache.hadoop.ozone.container.common.volume
-    .RoundRobinVolumeChoosingPolicy;
+import org.apache.hadoop.ozone.container.common.volume.RoundRobinVolumeChoosingPolicy;
 import org.apache.hadoop.ozone.container.common.volume.VolumeSet;
 import org.apache.hadoop.ozone.container.keyvalue.KeyValueContainer;
 import org.apache.hadoop.ozone.container.keyvalue.KeyValueContainerData;
-import org.apache.hadoop.ozone.container.keyvalue.helpers.KeyUtils;
+import org.apache.hadoop.ozone.container.keyvalue.helpers.BlockUtils;
 import org.apache.hadoop.ozone.container.keyvalue.impl.ChunkManagerImpl;
-import org.apache.hadoop.ozone.container.keyvalue.impl.KeyManagerImpl;
+import org.apache.hadoop.ozone.container.keyvalue.impl.BlockManagerImpl;
 import org.apache.hadoop.ozone.container.keyvalue.interfaces.ChunkManager;
-import org.apache.hadoop.ozone.container.keyvalue.interfaces.KeyManager;
+import org.apache.hadoop.ozone.container.keyvalue.interfaces.BlockManager;
 import org.apache.hadoop.test.GenericTestUtils;
-import org.apache.hadoop.ozone.container.common.helpers.ChunkInfo;
-import org.apache.hadoop.ozone.container.common.helpers.KeyData;
 import org.apache.hadoop.utils.MetadataStore;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -69,113 +65,78 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.ArrayList;
 import java.util.UUID;
 
-import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY;
-import static org.apache.hadoop.ozone.OzoneConsts.CONTAINER_ROOT_PREFIX;
+import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.Stage.COMBINED;
 import static org.apache.hadoop.ozone.container.ContainerTestHelper.getChunk;
 import static org.apache.hadoop.ozone.container.ContainerTestHelper.getData;
-import static org.apache.hadoop.ozone.container.ContainerTestHelper
-    .setDataChecksum;
-import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
-    .Stage.COMBINED;
+import static org.apache.hadoop.ozone.container.ContainerTestHelper.setDataChecksum;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * Simple tests to verify that container persistence works as expected.
- * Some of these tests are specific to {@link KeyValueContainer}. If a new
- * {@link ContainerProtos.ContainerType} is added, the tests need to be
- * modified.
+ * Simple tests to verify that container persistence works as expected. Some of
+ * these tests are specific to {@link KeyValueContainer}. If a new {@link
+ * ContainerProtos.ContainerType} is added, the tests need to be modified.
  */
 public class TestContainerPersistence {
+  private static final String DATANODE_UUID = UUID.randomUUID().toString();
+  private static final String SCM_ID = UUID.randomUUID().toString();
+  private static Logger log =
+      LoggerFactory.getLogger(TestContainerPersistence.class);
+  private static String hddsPath;
+  private static OzoneConfiguration conf;
+  private static ContainerSet containerSet;
+  private static VolumeSet volumeSet;
+  private static VolumeChoosingPolicy volumeChoosingPolicy;
+  private static BlockManager blockManager;
+  private static ChunkManager chunkManager;
   @Rule
   public ExpectedException exception = ExpectedException.none();
-
   /**
    * Set the timeout for every test.
    */
   @Rule
   public Timeout testTimeout = new Timeout(300000);
-
-  private static Logger log =
-      LoggerFactory.getLogger(TestContainerPersistence.class);
-  private static String hddsPath;
-  private static String path;
-  private static OzoneConfiguration conf;
-  private static List<StorageLocation> pathLists = new LinkedList<>();
-  private Long  containerID = 8888L;;
-  private static final String datanodeUuid = UUID.randomUUID().toString();
-  private static final String scmId = UUID.randomUUID().toString();
-
-  private static ContainerSet containerSet;
-  private static VolumeSet volumeSet;
-  private static VolumeChoosingPolicy volumeChoosingPolicy;
-  private static KeyManager keyManager;
-  private static ChunkManager chunkManager;
+  private Long containerID = 8888L;
 
   @BeforeClass
   public static void init() throws Throwable {
     conf = new OzoneConfiguration();
     hddsPath = GenericTestUtils
         .getTempPath(TestContainerPersistence.class.getSimpleName());
-    path = hddsPath + conf.getTrimmed(OzoneConfigKeys.OZONE_LOCALSTORAGE_ROOT,
-        OzoneConfigKeys.OZONE_LOCALSTORAGE_ROOT_DEFAULT);
-    conf.set(OzoneConfigKeys.OZONE_LOCALSTORAGE_ROOT, path);
     conf.set(ScmConfigKeys.HDDS_DATANODE_DIR_KEY, hddsPath);
-
-    File containerDir = new File(path);
-    if (containerDir.exists()) {
-      FileUtils.deleteDirectory(new File(path));
-    }
-    Assert.assertTrue(containerDir.mkdirs());
     volumeChoosingPolicy = new RoundRobinVolumeChoosingPolicy();
   }
 
   @AfterClass
   public static void shutdown() throws IOException {
-    FileUtils.deleteDirectory(new File(path));
     FileUtils.deleteDirectory(new File(hddsPath));
   }
 
   @Before
   public void setupPaths() throws IOException {
-    if (!new File(path).exists() && !new File(path).mkdirs()) {
-      throw new IOException("Unable to create paths. " + path);
-    }
-    StorageLocation loc = StorageLocation.parse(
-        Paths.get(path).resolve(CONTAINER_ROOT_PREFIX).toString());
-
-    pathLists.clear();
     containerSet = new ContainerSet();
-    volumeSet = new VolumeSet(datanodeUuid, conf);
-    keyManager = new KeyManagerImpl(conf);
+    volumeSet = new VolumeSet(DATANODE_UUID, conf);
+    blockManager = new BlockManagerImpl(conf);
     chunkManager = new ChunkManagerImpl();
 
-    if (!new File(loc.getNormalizedUri()).mkdirs()) {
-      throw new IOException("unable to create paths. " +
-          loc.getNormalizedUri());
-    }
-    pathLists.add(loc);
-
-    for (String dir : conf.getStrings(DFS_DATANODE_DATA_DIR_KEY)) {
+    for (String dir : conf.getStrings(ScmConfigKeys.HDDS_DATANODE_DIR_KEY)) {
       StorageLocation location = StorageLocation.parse(dir);
       FileUtils.forceMkdir(new File(location.getNormalizedUri()));
     }
- }
+  }
 
   @After
   public void cleanupDir() throws IOException {
     // Clean up SCM metadata
-    log.info("Deleting {}", path);
-    FileUtils.deleteDirectory(new File(path));
     log.info("Deleting {}", hddsPath);
     FileUtils.deleteDirectory(new File(hddsPath));
 
@@ -190,16 +151,16 @@ public class TestContainerPersistence {
     return ContainerTestHelper.getTestContainerID();
   }
 
-  private Container addContainer(ContainerSet containerSet, long containerID)
+  private Container addContainer(ContainerSet cSet, long cID)
       throws IOException {
-    KeyValueContainerData data = new KeyValueContainerData(containerID,
-        ContainerTestHelper.CONTAINER_MAX_SIZE_GB);
+    KeyValueContainerData data = new KeyValueContainerData(cID,
+        ContainerTestHelper.CONTAINER_MAX_SIZE);
     data.addMetadata("VOLUME", "shire");
     data.addMetadata("owner)", "bilbo");
     KeyValueContainer container = new KeyValueContainer(data, conf);
-    container.create(volumeSet, volumeChoosingPolicy, scmId);
-    containerSet.addContainer(container);
-    return  container;
+    container.create(volumeSet, volumeChoosingPolicy, SCM_ID);
+    cSet.addContainer(container);
+    return container;
   }
 
   @Test
@@ -210,7 +171,7 @@ public class TestContainerPersistence {
         .containsKey(testContainerID));
     KeyValueContainerData kvData =
         (KeyValueContainerData) containerSet.getContainer(testContainerID)
-        .getContainerData();
+            .getContainerData();
 
     Assert.assertNotNull(kvData);
     Assert.assertTrue(new File(kvData.getMetadataPath()).exists());
@@ -222,7 +183,7 @@ public class TestContainerPersistence {
 
     MetadataStore store = null;
     try {
-      store = KeyUtils.getDB(kvData, conf);
+      store = BlockUtils.getDB(kvData, conf);
       Assert.assertNotNull(store);
     } finally {
       if (store != null) {
@@ -265,19 +226,19 @@ public class TestContainerPersistence {
     Assert.assertFalse(containerSet.getContainerMap()
         .containsKey(testContainerID1));
 
-    // Adding key to a deleted container should fail.
+    // Adding block to a deleted container should fail.
     exception.expect(StorageContainerException.class);
     exception.expectMessage("Error opening DB.");
     BlockID blockID1 = ContainerTestHelper.getTestBlockID(testContainerID1);
-    KeyData someKey1 = new KeyData(blockID1);
+    BlockData someKey1 = new BlockData(blockID1);
     someKey1.setChunks(new LinkedList<ContainerProtos.ChunkInfo>());
-    keyManager.putKey(container1, someKey1);
+    blockManager.putBlock(container1, someKey1);
 
     // Deleting a non-empty container should fail.
     BlockID blockID2 = ContainerTestHelper.getTestBlockID(testContainerID2);
-    KeyData someKey2 = new KeyData(blockID2);
+    BlockData someKey2 = new BlockData(blockID2);
     someKey2.setChunks(new LinkedList<ContainerProtos.ChunkInfo>());
-    keyManager.putKey(container2, someKey2);
+    blockManager.putBlock(container2, someKey2);
 
     exception.expect(StorageContainerException.class);
     exception.expectMessage(
@@ -288,7 +249,7 @@ public class TestContainerPersistence {
   }
 
   @Test
-  public void testGetContainerReports() throws Exception{
+  public void testGetContainerReports() throws Exception {
     final int count = 10;
     List<Long> containerIDs = new ArrayList<>();
 
@@ -297,7 +258,7 @@ public class TestContainerPersistence {
       Container container = addContainer(containerSet, testContainerID);
 
       // Close a bunch of containers.
-      if (i%3 == 0) {
+      if (i % 3 == 0) {
         container.close();
       }
       containerIDs.add(testContainerID);
@@ -308,7 +269,8 @@ public class TestContainerPersistence {
     List<StorageContainerDatanodeProtocolProtos.ContainerInfo> reports =
         containerSet.getContainerReport().getReportsList();
     Assert.assertEquals(10, reports.size());
-    for(StorageContainerDatanodeProtocolProtos.ContainerInfo   report : reports) {
+    for (StorageContainerDatanodeProtocolProtos.ContainerInfo report :
+        reports) {
       long actualContainerID = report.getContainerID();
       Assert.assertTrue(containerIDs.remove(actualContainerID));
     }
@@ -316,8 +278,8 @@ public class TestContainerPersistence {
   }
 
   /**
-   * This test creates 50 containers and reads them back 5 containers at a
-   * time and verifies that we did get back all containers.
+   * This test creates 50 containers and reads them back 5 containers at a time
+   * and verifies that we did get back all containers.
    *
    * @throws IOException
    */
@@ -362,7 +324,8 @@ public class TestContainerPersistence {
     if (container == null) {
       container = addContainer(containerSet, testContainerID);
     }
-    ChunkInfo info = getChunk(blockID.getLocalID(), 0, 0, datalen);
+    ChunkInfo info = getChunk(
+        blockID.getLocalID(), 0, 0, datalen);
     byte[] data = getData(datalen);
     setDataChecksum(info, data);
     chunkManager.writeChunk(container, blockID, info, data, COMBINED);
@@ -385,8 +348,8 @@ public class TestContainerPersistence {
   }
 
   /**
-   * Writes many chunks of the same key into different chunk files and verifies
-   * that we have that data in many files.
+   * Writes many chunks of the same block into different chunk files and
+   * verifies that we have that data in many files.
    *
    * @throws IOException
    * @throws NoSuchAlgorithmException
@@ -427,7 +390,7 @@ public class TestContainerPersistence {
         sha.update(FileUtils.readFileToByteArray(fname.toFile()));
         String val = Hex.encodeHexString(sha.digest());
         Assert.assertEquals(fileHashMap.get(fname.getFileName().toString())
-                .getChecksum(), val);
+            .getChecksum(), val);
         count++;
         sha.reset();
       }
@@ -455,14 +418,15 @@ public class TestContainerPersistence {
   @Test
   public void testPartialRead() throws Exception {
     final int datalen = 1024;
-    final int start = datalen/4;
-    final int length = datalen/2;
+    final int start = datalen / 4;
+    final int length = datalen / 2;
 
     long testContainerID = getTestContainerID();
     Container container = addContainer(containerSet, testContainerID);
 
     BlockID blockID = ContainerTestHelper.getTestBlockID(testContainerID);
-    ChunkInfo info = getChunk(blockID.getLocalID(), 0, 0, datalen);
+    ChunkInfo info = getChunk(
+        blockID.getLocalID(), 0, 0, datalen);
     byte[] data = getData(datalen);
     setDataChecksum(info, data);
     chunkManager.writeChunk(container, blockID, info, data, COMBINED);
@@ -493,7 +457,8 @@ public class TestContainerPersistence {
     Container container = addContainer(containerSet, testContainerID);
 
     BlockID blockID = ContainerTestHelper.getTestBlockID(testContainerID);
-    ChunkInfo info = getChunk(blockID.getLocalID(), 0, 0, datalen);
+    ChunkInfo info = getChunk(
+        blockID.getLocalID(), 0, 0, datalen);
     byte[] data = getData(datalen);
     setDataChecksum(info, data);
     chunkManager.writeChunk(container, blockID, info, data, COMBINED);
@@ -537,7 +502,8 @@ public class TestContainerPersistence {
     for (int x = 0; x < chunkCount; x++) {
       // we are writing to the same chunk file but at different offsets.
       long offset = x * datalen;
-      ChunkInfo info = getChunk(blockID.getLocalID(), 0, offset, datalen);
+      ChunkInfo info = getChunk(
+          blockID.getLocalID(), 0, offset, datalen);
       byte[] data = getData(datalen);
       oldSha.update(data);
       setDataChecksum(info, data);
@@ -545,7 +511,8 @@ public class TestContainerPersistence {
     }
 
     // Request to read the whole data in a single go.
-    ChunkInfo largeChunk = getChunk(blockID.getLocalID(), 0, 0, datalen * chunkCount);
+    ChunkInfo largeChunk = getChunk(blockID.getLocalID(), 0, 0,
+        datalen * chunkCount);
     byte[] newdata = chunkManager.readChunk(container, blockID, largeChunk);
     MessageDigest newSha = MessageDigest.getInstance(OzoneConsts.FILE_HASH);
     newSha.update(newdata);
@@ -567,7 +534,8 @@ public class TestContainerPersistence {
     Container container = addContainer(containerSet, testContainerID);
 
     BlockID blockID = ContainerTestHelper.getTestBlockID(testContainerID);
-    ChunkInfo info = getChunk(blockID.getLocalID(), 0, 0, datalen);
+    ChunkInfo info = getChunk(
+        blockID.getLocalID(), 0, 0, datalen);
     byte[] data = getData(datalen);
     setDataChecksum(info, data);
     chunkManager.writeChunk(container, blockID, info, data, COMBINED);
@@ -578,37 +546,38 @@ public class TestContainerPersistence {
   }
 
   /**
-   * Tests a put key and read key.
+   * Tests a put block and read block.
    *
    * @throws IOException
    * @throws NoSuchAlgorithmException
    */
   @Test
-  public void testPutKey() throws IOException, NoSuchAlgorithmException {
+  public void testPutBlock() throws IOException, NoSuchAlgorithmException {
     long testContainerID = getTestContainerID();
     Container container = addContainer(containerSet, testContainerID);
 
     BlockID blockID = ContainerTestHelper.getTestBlockID(testContainerID);
     ChunkInfo info = writeChunkHelper(blockID);
-    KeyData keyData = new KeyData(blockID);
+    BlockData blockData = new BlockData(blockID);
     List<ContainerProtos.ChunkInfo> chunkList = new LinkedList<>();
     chunkList.add(info.getProtoBufMessage());
-    keyData.setChunks(chunkList);
-    keyManager.putKey(container, keyData);
-    KeyData readKeyData = keyManager.getKey(container, keyData.getBlockID());
+    blockData.setChunks(chunkList);
+    blockManager.putBlock(container, blockData);
+    BlockData readBlockData = blockManager.
+        getBlock(container, blockData.getBlockID());
     ChunkInfo readChunk =
-        ChunkInfo.getFromProtoBuf(readKeyData.getChunks().get(0));
+        ChunkInfo.getFromProtoBuf(readBlockData.getChunks().get(0));
     Assert.assertEquals(info.getChecksum(), readChunk.getChecksum());
   }
 
   /**
-   * Tests a put key and read key.
+   * Tests a put block and read block.
    *
    * @throws IOException
    * @throws NoSuchAlgorithmException
    */
   @Test
-  public void testPutKeyWithLotsOfChunks() throws IOException,
+  public void testPutBlockWithLotsOfChunks() throws IOException,
       NoSuchAlgorithmException {
     final int chunkCount = 2;
     final int datalen = 1024;
@@ -639,71 +608,72 @@ public class TestContainerPersistence {
     long writeCount = container.getContainerData().getWriteCount();
     Assert.assertEquals(chunkCount, writeCount);
 
-    KeyData keyData = new KeyData(blockID);
+    BlockData blockData = new BlockData(blockID);
     List<ContainerProtos.ChunkInfo> chunkProtoList = new LinkedList<>();
     for (ChunkInfo i : chunkList) {
       chunkProtoList.add(i.getProtoBufMessage());
     }
-    keyData.setChunks(chunkProtoList);
-    keyManager.putKey(container, keyData);
-    KeyData readKeyData = keyManager.getKey(container, keyData.getBlockID());
+    blockData.setChunks(chunkProtoList);
+    blockManager.putBlock(container, blockData);
+    BlockData readBlockData = blockManager.
+        getBlock(container, blockData.getBlockID());
     ChunkInfo lastChunk = chunkList.get(chunkList.size() - 1);
     ChunkInfo readChunk =
-        ChunkInfo.getFromProtoBuf(readKeyData.getChunks().get(readKeyData
+        ChunkInfo.getFromProtoBuf(readBlockData.getChunks().get(readBlockData
             .getChunks().size() - 1));
     Assert.assertEquals(lastChunk.getChecksum(), readChunk.getChecksum());
   }
 
   /**
-   * Deletes a key and tries to read it back.
+   * Deletes a block and tries to read it back.
    *
    * @throws IOException
    * @throws NoSuchAlgorithmException
    */
   @Test
-  public void testDeleteKey() throws IOException, NoSuchAlgorithmException {
+  public void testDeleteBlock() throws IOException, NoSuchAlgorithmException {
     long testContainerID = getTestContainerID();
     Container container = addContainer(containerSet, testContainerID);
     BlockID blockID = ContainerTestHelper.getTestBlockID(testContainerID);
     ChunkInfo info = writeChunkHelper(blockID);
-    KeyData keyData = new KeyData(blockID);
+    BlockData blockData = new BlockData(blockID);
     List<ContainerProtos.ChunkInfo> chunkList = new LinkedList<>();
     chunkList.add(info.getProtoBufMessage());
-    keyData.setChunks(chunkList);
-    keyManager.putKey(container, keyData);
-    keyManager.deleteKey(container, blockID);
+    blockData.setChunks(chunkList);
+    blockManager.putBlock(container, blockData);
+    blockManager.deleteBlock(container, blockID);
     exception.expect(StorageContainerException.class);
-    exception.expectMessage("Unable to find the key.");
-    keyManager.getKey(container, keyData.getBlockID());
+    exception.expectMessage("Unable to find the block.");
+    blockManager.getBlock(container, blockData.getBlockID());
   }
 
   /**
-   * Tries to Deletes a key twice.
+   * Tries to Deletes a block twice.
    *
    * @throws IOException
    * @throws NoSuchAlgorithmException
    */
   @Test
-  public void testDeleteKeyTwice() throws IOException,
+  public void testDeleteBlockTwice() throws IOException,
       NoSuchAlgorithmException {
     long testContainerID = getTestContainerID();
     Container container = addContainer(containerSet, testContainerID);
     BlockID blockID = ContainerTestHelper.getTestBlockID(testContainerID);
     ChunkInfo info = writeChunkHelper(blockID);
-    KeyData keyData = new KeyData(blockID);
+    BlockData blockData = new BlockData(blockID);
     List<ContainerProtos.ChunkInfo> chunkList = new LinkedList<>();
     chunkList.add(info.getProtoBufMessage());
-    keyData.setChunks(chunkList);
-    keyManager.putKey(container, keyData);
-    keyManager.deleteKey(container, blockID);
+    blockData.setChunks(chunkList);
+    blockManager.putBlock(container, blockData);
+    blockManager.deleteBlock(container, blockID);
     exception.expect(StorageContainerException.class);
-    exception.expectMessage("Unable to find the key.");
-    keyManager.deleteKey(container, blockID);
+    exception.expectMessage("Unable to find the block.");
+    blockManager.deleteBlock(container, blockID);
   }
 
   /**
-   * Tries to update an existing and non-existing container.
-   * Verifies container map and persistent data both updated.
+   * Tries to update an existing and non-existing container. Verifies container
+   * map and persistent data both updated.
    *
    * @throws IOException
    */
@@ -744,7 +714,7 @@ public class TestContainerPersistence {
         orgContainerFile.getAbsolutePath(),
         newContainerFile.getAbsolutePath());
 
-    ContainerData actualContainerData =  ContainerDataYaml.readContainerFile(
+    ContainerData actualContainerData = ContainerDataYaml.readContainerFile(
         newContainerFile);
     Assert.assertEquals("shire_new",
         actualContainerData.getMetadata().get("VOLUME"));
@@ -758,8 +728,9 @@ public class TestContainerPersistence {
     try {
       container.update(newMetadata, false);
     } catch (StorageContainerException ex) {
-      Assert.assertEquals("Updating a closed container without force option " +
-          "is not allowed. ContainerID: " + testContainerID, ex.getMessage());
+      Assert.assertEquals("Updating a closed container without " +
+          "force option is not allowed. ContainerID: " +
+          testContainerID, ex.getMessage());
     }
 
     // Update with force flag, it should be success.
@@ -775,63 +746,57 @@ public class TestContainerPersistence {
     Assert.assertEquals("bilbo_new_1",
         actualNewData.getMetadata().get("owner"));
 
-    // Update a non-existing container
-    exception.expect(StorageContainerException.class);
-    exception.expectMessage("Container is an Inconsistent " +
-        "state, missing .container file.");
-    Container nonExistentContainer = new KeyValueContainer(
-        new KeyValueContainerData(RandomUtils.nextLong(),
-            ContainerTestHelper.CONTAINER_MAX_SIZE_GB), conf);
-    nonExistentContainer.update(newMetadata, false);
   }
 
-  private KeyData writeKeyHelper(BlockID blockID)
+  private BlockData writeBlockHelper(BlockID blockID)
       throws IOException, NoSuchAlgorithmException {
     ChunkInfo info = writeChunkHelper(blockID);
-    KeyData keyData = new KeyData(blockID);
+    BlockData blockData = new BlockData(blockID);
     List<ContainerProtos.ChunkInfo> chunkList = new LinkedList<>();
     chunkList.add(info.getProtoBufMessage());
-    keyData.setChunks(chunkList);
-    return keyData;
+    blockData.setChunks(chunkList);
+    return blockData;
   }
 
   @Test
-  public void testListKey() throws Exception {
+  public void testListBlock() throws Exception {
     long testContainerID = getTestContainerID();
     Container container = addContainer(containerSet, testContainerID);
-    List<BlockID> expectedKeys = new ArrayList<>();
+    List<BlockID> expectedBlocks = new ArrayList<>();
     for (int i = 0; i < 10; i++) {
       BlockID blockID = new BlockID(testContainerID, i);
-      expectedKeys.add(blockID);
-      KeyData kd = writeKeyHelper(blockID);
-      keyManager.putKey(container, kd);
+      expectedBlocks.add(blockID);
+      BlockData kd = writeBlockHelper(blockID);
+      blockManager.putBlock(container, kd);
     }
 
-    // List all keys
-    List<KeyData> result = keyManager.listKey(container, 0, 100);
+    // List all blocks
+    List<BlockData> result = blockManager.listBlock(
+        container, 0, 100);
     Assert.assertEquals(10, result.size());
 
     int index = 0;
     for (int i = index; i < result.size(); i++) {
-      KeyData data = result.get(i);
+      BlockData data = result.get(i);
       Assert.assertEquals(testContainerID, data.getContainerID());
-      Assert.assertEquals(expectedKeys.get(i).getLocalID(), data.getLocalID());
+      Assert.assertEquals(expectedBlocks.get(i).getLocalID(),
+          data.getLocalID());
       index++;
     }
 
-    // List key with startKey filter
-    long k6 = expectedKeys.get(6).getLocalID();
-    result = keyManager.listKey(container, k6, 100);
+    // List block with startBlock filter
+    long k6 = expectedBlocks.get(6).getLocalID();
+    result = blockManager.listBlock(container, k6, 100);
 
     Assert.assertEquals(4, result.size());
     for (int i = 6; i < 10; i++) {
-      Assert.assertEquals(expectedKeys.get(i).getLocalID(),
+      Assert.assertEquals(expectedBlocks.get(i).getLocalID(),
           result.get(i - 6).getLocalID());
     }
 
     // Count must be >0
     exception.expect(IllegalArgumentException.class);
     exception.expectMessage("Count must be a positive number.");
-    keyManager.listKey(container, 0, -1);
+    blockManager.listBlock(container, 0, -1);
   }
 }

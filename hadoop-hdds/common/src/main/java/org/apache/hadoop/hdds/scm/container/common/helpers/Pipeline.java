@@ -34,7 +34,7 @@ import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Map;
-import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.List;
 
 /**
@@ -64,9 +64,7 @@ public class Pipeline {
   private HddsProtos.LifeCycleState lifeCycleState;
   private HddsProtos.ReplicationType type;
   private HddsProtos.ReplicationFactor factor;
-  private String name;
-  // TODO: change to long based id
-  //private long id;
+  private PipelineID id;
 
   /**
    * Constructs a new pipeline data structure.
@@ -75,17 +73,41 @@ public class Pipeline {
    * @param lifeCycleState  - Pipeline State
    * @param replicationType - Replication protocol
    * @param replicationFactor - replication count on datanodes
-   * @param name  - pipelineName
+   * @param id  - pipeline ID
    */
   public Pipeline(String leaderID, HddsProtos.LifeCycleState lifeCycleState,
       HddsProtos.ReplicationType replicationType,
-      HddsProtos.ReplicationFactor replicationFactor, String name) {
+      HddsProtos.ReplicationFactor replicationFactor, PipelineID id) {
     this.leaderID = leaderID;
     this.lifeCycleState = lifeCycleState;
     this.type = replicationType;
     this.factor = replicationFactor;
-    this.name = name;
-    datanodes = new TreeMap<>();
+    this.id = id;
+    datanodes = new ConcurrentHashMap<>();
+  }
+
+  @Override
+  public int hashCode() {
+    return id.hashCode();
+  }
+
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
+
+    Pipeline that = (Pipeline) o;
+
+    return id.equals(that.id)
+            && factor.equals(that.factor)
+            && type.equals(that.type)
+            && lifeCycleState.equals(that.lifeCycleState)
+            && leaderID.equals(that.leaderID);
+
   }
 
   /**
@@ -102,7 +124,7 @@ public class Pipeline {
             pipelineProto.getState(),
             pipelineProto.getType(),
             pipelineProto.getFactor(),
-            pipelineProto.getName());
+            PipelineID.getFromProtobuf(pipelineProto.getId()));
 
     for (HddsProtos.DatanodeDetailsProto dataID :
         pipelineProto.getMembersList()) {
@@ -129,13 +151,29 @@ public class Pipeline {
     return getDatanodes().get(leaderID);
   }
 
-  public void addMember(DatanodeDetails datanodeDetails) {
-    datanodes.put(datanodeDetails.getUuid().toString(),
-        datanodeDetails);
+  /**
+   * Adds a datanode to pipeline
+   * @param datanodeDetails datanode to be added.
+   * @return true if the dn was not earlier present, false otherwise
+   */
+  public boolean addMember(DatanodeDetails datanodeDetails) {
+    return datanodes.put(datanodeDetails.getUuid().toString(),
+        datanodeDetails) == null;
+
+  }
+
+  public void resetPipeline() {
+    // reset datanodes in pipeline and learn about them through
+    // pipeline reports on SCM restart
+    datanodes.clear();
   }
 
   public Map<String, DatanodeDetails> getDatanodes() {
     return datanodes;
+  }
+
+  public boolean isEmpty() {
+    return datanodes.isEmpty();
   }
   /**
    * Returns the leader host.
@@ -171,8 +209,8 @@ public class Pipeline {
    */
   public List<String> getDatanodeHosts() {
     List<String> dataHosts = new ArrayList<>();
-    for (DatanodeDetails id :getDatanodes().values()) {
-      dataHosts.add(id.getHostName());
+    for (DatanodeDetails datanode : getDatanodes().values()) {
+      dataHosts.add(datanode.getHostName());
     }
     return dataHosts;
   }
@@ -191,15 +229,19 @@ public class Pipeline {
     }
     builder.setLeaderID(leaderID);
 
-    if (this.getLifeCycleState() != null) {
-      builder.setState(this.getLifeCycleState());
+    if (lifeCycleState != null) {
+      builder.setState(lifeCycleState);
     }
-    if (this.getType() != null) {
-      builder.setType(this.getType());
+    if (type != null) {
+      builder.setType(type);
     }
 
-    if (this.getFactor() != null) {
-      builder.setFactor(this.getFactor());
+    if (factor != null) {
+      builder.setFactor(factor);
+    }
+
+    if (id != null) {
+      builder.setId(id.getProtobuf());
     }
     return builder.build();
   }
@@ -217,16 +259,16 @@ public class Pipeline {
    * Update the State of the pipeline.
    */
   public void setLifeCycleState(HddsProtos.LifeCycleState nextState) {
-     lifeCycleState = nextState;
+    lifeCycleState = nextState;
   }
 
   /**
-   * Gets the pipeline Name.
+   * Gets the pipeline id.
    *
-   * @return - Name of the pipeline
+   * @return - Id of the pipeline
    */
-  public String getPipelineName() {
-    return name;
+  public PipelineID getId() {
+    return id;
   }
 
   /**
@@ -242,10 +284,9 @@ public class Pipeline {
   public String toString() {
     final StringBuilder b = new StringBuilder(getClass().getSimpleName())
         .append("[");
-    getDatanodes().keySet().stream()
-        .forEach(id -> b.
-            append(id.endsWith(getLeaderID()) ? "*" + id : id));
-    b.append(" name:").append(getPipelineName());
+    getDatanodes().keySet().forEach(
+        node -> b.append(node.endsWith(getLeaderID()) ? "*" + id : id));
+    b.append(" id:").append(id);
     if (getType() != null) {
       b.append(" type:").append(getType().toString());
     }

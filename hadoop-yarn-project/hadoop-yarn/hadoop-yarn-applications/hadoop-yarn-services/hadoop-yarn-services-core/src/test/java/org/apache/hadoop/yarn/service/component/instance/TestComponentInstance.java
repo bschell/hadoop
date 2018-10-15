@@ -20,6 +20,7 @@ package org.apache.hadoop.yarn.service.component.instance;
 
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.api.records.ContainerExitStatus;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
@@ -86,7 +87,7 @@ public class TestComponentInstance {
   @Test
   public void testContainerReadyAfterUpgrade() throws Exception {
     ServiceContext context = TestComponent.createTestContext(rule,
-        "testContainerStarted");
+        "testContainerReadyAfterUpgrade");
     Component component = context.scheduler.getAllComponents().entrySet()
         .iterator().next().getValue();
     upgradeComponent(component);
@@ -101,14 +102,188 @@ public class TestComponentInstance {
     instance.handle(new ComponentInstanceEvent(instance.getContainer().getId(),
         ComponentInstanceEventType.BECOME_READY));
     Assert.assertEquals("instance not ready", ContainerState.READY,
-        instance.getCompSpec().getContainer(
-            instance.getContainer().getId().toString()).getState());
+        component.getComponentSpec().getContainer(instance.getContainer()
+            .getId().toString()).getState());
+  }
+
+
+  @Test
+  public void testContainerUpgradeFailed() throws Exception {
+    ServiceContext context = TestComponent.createTestContext(rule,
+        "testContainerUpgradeFailed");
+    Component component = context.scheduler.getAllComponents().entrySet()
+        .iterator().next().getValue();
+    upgradeComponent(component);
+
+    ComponentInstance instance = component.getAllComponentInstances().iterator()
+        .next();
+
+    ComponentInstanceEvent upgradeEvent = new ComponentInstanceEvent(
+        instance.getContainer().getId(), ComponentInstanceEventType.UPGRADE);
+    instance.handle(upgradeEvent);
+
+    ContainerStatus containerStatus = mock(ContainerStatus.class);
+    when(containerStatus.getExitStatus()).thenReturn(
+        ContainerExitStatus.ABORTED);
+    ComponentInstanceEvent stopEvent = new ComponentInstanceEvent(
+        instance.getContainer().getId(), ComponentInstanceEventType.STOP)
+        .setStatus(containerStatus);
+    // this is the call back from NM for the upgrade
+    instance.handle(stopEvent);
+    Assert.assertEquals("instance did not fail", ContainerState.FAILED_UPGRADE,
+        component.getComponentSpec().getContainer(instance.getContainer()
+            .getId().toString()).getState());
+  }
+
+  @Test
+  public void testCancelNothingToUpgrade() throws Exception {
+    ServiceContext context = TestComponent.createTestContext(rule,
+        "testCancelUpgradeWhenContainerReady");
+    Component component = context.scheduler.getAllComponents().entrySet()
+        .iterator().next().getValue();
+    cancelCompUpgrade(component);
+
+    ComponentInstance instance = component.getAllComponentInstances().iterator()
+        .next();
+
+    ComponentInstanceEvent cancelEvent = new ComponentInstanceEvent(
+        instance.getContainer().getId(),
+        ComponentInstanceEventType.CANCEL_UPGRADE);
+    instance.handle(cancelEvent);
+
+    Assert.assertEquals("instance not ready", ContainerState.READY,
+        component.getComponentSpec().getContainer(instance.getContainer()
+            .getId().toString()).getState());
+  }
+
+  @Test
+  public void testCancelUpgradeFailed() throws Exception {
+    ServiceContext context = TestComponent.createTestContext(rule,
+        "testCancelUpgradeFailed");
+    Component component = context.scheduler.getAllComponents().entrySet()
+        .iterator().next().getValue();
+    cancelCompUpgrade(component);
+
+    ComponentInstance instance = component.getAllComponentInstances().iterator()
+        .next();
+
+    ComponentInstanceEvent cancelEvent = new ComponentInstanceEvent(
+        instance.getContainer().getId(),
+        ComponentInstanceEventType.CANCEL_UPGRADE);
+    instance.handle(cancelEvent);
+
+    instance.handle(new ComponentInstanceEvent(instance.getContainer().getId(),
+        ComponentInstanceEventType.STOP));
+    Assert.assertEquals("instance not init", ComponentInstanceState.INIT,
+        instance.getState());
+  }
+
+  @Test
+  public void testCancelAfterCompProcessedCancel() throws Exception {
+    ServiceContext context = TestComponent.createTestContext(rule,
+        "testCancelAfterCompProcessedCancel");
+    Component component = context.scheduler.getAllComponents().entrySet()
+        .iterator().next().getValue();
+    upgradeComponent(component);
+    cancelCompUpgrade(component);
+
+    ComponentInstance instance = component.getAllComponentInstances().iterator()
+        .next();
+    ComponentInstanceEvent upgradeEvent = new ComponentInstanceEvent(
+        instance.getContainer().getId(), ComponentInstanceEventType.UPGRADE);
+    instance.handle(upgradeEvent);
+
+    Assert.assertEquals("instance should start upgrading",
+        ContainerState.NEEDS_UPGRADE,
+        component.getComponentSpec().getContainer(instance.getContainer()
+            .getId().toString()).getState());
+  }
+
+  @Test
+  public void testCancelWhileUpgradeWithSuccess() throws Exception {
+    validateCancelWhileUpgrading(true, true);
+  }
+
+  @Test
+  public void testCancelWhileUpgradeWithFailure() throws Exception {
+    validateCancelWhileUpgrading(false, true);
+  }
+
+  @Test
+  public void testCancelFailedWhileUpgradeWithSuccess() throws Exception {
+    validateCancelWhileUpgrading(true, false);
+  }
+
+  @Test
+  public void testCancelFailedWhileUpgradeWithFailure() throws Exception {
+    validateCancelWhileUpgrading(false, false);
+  }
+
+  private void validateCancelWhileUpgrading(boolean upgradeSuccessful,
+      boolean cancelUpgradeSuccessful)
+      throws Exception {
+    ServiceContext context = TestComponent.createTestContext(rule,
+        "testCancelWhileUpgrading");
+    Component component = context.scheduler.getAllComponents().entrySet()
+        .iterator().next().getValue();
+    upgradeComponent(component);
+
+    ComponentInstance instance = component.getAllComponentInstances().iterator()
+        .next();
+    ComponentInstanceEvent upgradeEvent = new ComponentInstanceEvent(
+        instance.getContainer().getId(), ComponentInstanceEventType.UPGRADE);
+    instance.handle(upgradeEvent);
+
+    Assert.assertEquals("instance should be upgrading",
+        ContainerState.UPGRADING,
+        component.getComponentSpec().getContainer(instance.getContainer()
+            .getId().toString()).getState());
+
+    cancelCompUpgrade(component);
+    ComponentInstanceEvent cancelEvent = new ComponentInstanceEvent(
+        instance.getContainer().getId(),
+        ComponentInstanceEventType.CANCEL_UPGRADE);
+    instance.handle(cancelEvent);
+
+    // either upgrade failed or successful
+    ComponentInstanceEvent readyOrStopEvent = new ComponentInstanceEvent(
+        instance.getContainer().getId(),
+        upgradeSuccessful ? ComponentInstanceEventType.BECOME_READY :
+            ComponentInstanceEventType.STOP);
+
+    instance.handle(readyOrStopEvent);
+    Assert.assertEquals("instance not upgrading", ContainerState.UPGRADING,
+        component.getComponentSpec().getContainer(instance.getContainer()
+            .getId().toString()).getState());
+
+    // response for cancel received
+    ComponentInstanceEvent readyOrStopCancel = new ComponentInstanceEvent(
+        instance.getContainer().getId(),
+        cancelUpgradeSuccessful ? ComponentInstanceEventType.BECOME_READY :
+            ComponentInstanceEventType.STOP);
+
+    instance.handle(readyOrStopCancel);
+    if (cancelUpgradeSuccessful) {
+      Assert.assertEquals("instance not ready", ContainerState.READY,
+          component.getComponentSpec().getContainer(instance.getContainer()
+              .getId().toString()).getState());
+    } else {
+      Assert.assertEquals("instance not init", ComponentInstanceState.INIT,
+          instance.getState());
+    }
   }
 
   private void upgradeComponent(Component component) {
     component.handle(new ComponentEvent(component.getName(),
         ComponentEventType.UPGRADE).setTargetSpec(component.getComponentSpec())
         .setUpgradeVersion("v2"));
+  }
+
+  private void cancelCompUpgrade(Component component) {
+    component.handle(new ComponentEvent(component.getName(),
+        ComponentEventType.CANCEL_UPGRADE)
+        .setTargetSpec(component.getComponentSpec())
+        .setUpgradeVersion("v1"));
   }
 
   private Component createComponent(ServiceScheduler scheduler,
@@ -204,6 +379,8 @@ public class TestComponentInstance {
     when(componentInstance.getComponent()).thenReturn(component);
     when(componentInstance.getCompInstanceName()).thenReturn(
         "compInstance" + instanceId);
+    Container container = mock(Container.class);
+    when(componentInstance.getContainerSpec()).thenReturn(container);
 
     ServiceUtils.ProcessTerminationHandler terminationHandler = mock(
         ServiceUtils.ProcessTerminationHandler.class);
@@ -227,12 +404,15 @@ public class TestComponentInstance {
     Mockito.doNothing().when(serviceScheduler).setGracefulStop(
         any(FinalApplicationStatus.class));
 
+    final String containerDiag = "Container succeeded";
+
     ComponentInstanceEvent componentInstanceEvent = mock(
         ComponentInstanceEvent.class);
     ContainerId containerId = ContainerId.newContainerId(ApplicationAttemptId
         .newInstance(ApplicationId.newInstance(1234L, 1), 1), 1);
     ContainerStatus containerStatus = ContainerStatus.newInstance(containerId,
-        org.apache.hadoop.yarn.api.records.ContainerState.COMPLETE, "hello", 0);
+        org.apache.hadoop.yarn.api.records.ContainerState.COMPLETE,
+        containerDiag, 0);
 
     when(componentInstanceEvent.getStatus()).thenReturn(containerStatus);
 
@@ -245,7 +425,7 @@ public class TestComponentInstance {
         comp.getAllComponentInstances().iterator().next();
 
     ComponentInstance.handleComponentInstanceRelaunch(componentInstance,
-        componentInstanceEvent, false);
+        componentInstanceEvent, false, containerDiag);
 
     verify(comp, never()).markAsSucceeded(any(ComponentInstance.class));
     verify(comp, never()).markAsFailed(any(ComponentInstance.class));
@@ -262,7 +442,7 @@ public class TestComponentInstance {
     componentInstance = comp.getAllComponentInstances().iterator().next();
     containerStatus.setExitStatus(1);
     ComponentInstance.handleComponentInstanceRelaunch(componentInstance,
-        componentInstanceEvent, false);
+        componentInstanceEvent, false, containerDiag);
     verify(comp, never()).markAsSucceeded(any(ComponentInstance.class));
     verify(comp, never()).markAsFailed(any(ComponentInstance.class));
     verify(comp, times(1)).reInsertPendingInstance(
@@ -286,7 +466,7 @@ public class TestComponentInstance {
     when(comp.getNumSucceededInstances()).thenReturn(new Long(1));
 
     ComponentInstance.handleComponentInstanceRelaunch(componentInstance,
-        componentInstanceEvent, false);
+        componentInstanceEvent, false, containerDiag);
     verify(comp, times(1)).markAsSucceeded(any(ComponentInstance.class));
     verify(comp, never()).markAsFailed(any(ComponentInstance.class));
     verify(comp, times(0)).reInsertPendingInstance(
@@ -304,8 +484,7 @@ public class TestComponentInstance {
 
     when(comp.getNumFailedInstances()).thenReturn(new Long(1));
     ComponentInstance.handleComponentInstanceRelaunch(componentInstance,
-        componentInstanceEvent, false);
-
+        componentInstanceEvent, false, containerDiag);
     verify(comp, never()).markAsSucceeded(any(ComponentInstance.class));
     verify(comp, times(1)).markAsFailed(any(ComponentInstance.class));
     verify(comp, times(0)).reInsertPendingInstance(
@@ -323,7 +502,7 @@ public class TestComponentInstance {
     componentInstance = comp.getAllComponentInstances().iterator().next();
     containerStatus.setExitStatus(1);
     ComponentInstance.handleComponentInstanceRelaunch(componentInstance,
-        componentInstanceEvent, false);
+        componentInstanceEvent, false, containerDiag);
     verify(comp, never()).markAsSucceeded(any(ComponentInstance.class));
     verify(comp, never()).markAsFailed(any(ComponentInstance.class));
     verify(comp, times(1)).reInsertPendingInstance(
@@ -340,7 +519,7 @@ public class TestComponentInstance {
     componentInstance = comp.getAllComponentInstances().iterator().next();
     containerStatus.setExitStatus(1);
     ComponentInstance.handleComponentInstanceRelaunch(componentInstance,
-        componentInstanceEvent, false);
+        componentInstanceEvent, false, containerDiag);
     verify(comp, never()).markAsSucceeded(any(ComponentInstance.class));
     verify(comp, times(1)).markAsFailed(any(ComponentInstance.class));
     verify(comp, times(0)).reInsertPendingInstance(
@@ -363,8 +542,7 @@ public class TestComponentInstance {
     containerStatus.setExitStatus(1);
     ComponentInstance commponentInstance = iter.next();
     ComponentInstance.handleComponentInstanceRelaunch(commponentInstance,
-        componentInstanceEvent, false);
-
+        componentInstanceEvent, false, containerDiag);
     verify(comp, never()).markAsSucceeded(any(ComponentInstance.class));
     verify(comp, never()).markAsFailed(any(ComponentInstance.class));
     verify(comp, times(1)).reInsertPendingInstance(
@@ -404,7 +582,7 @@ public class TestComponentInstance {
       when(component2Instance.getComponent().getNumFailedInstances())
           .thenReturn(new Long(failed2Instances.size()));
       ComponentInstance.handleComponentInstanceRelaunch(component2Instance,
-          componentInstanceEvent, false);
+          componentInstanceEvent, false, containerDiag);
     }
 
     Map<String, ComponentInstance> failed1Instances = new HashMap<>();
@@ -418,7 +596,7 @@ public class TestComponentInstance {
       when(component1Instance.getComponent().getNumFailedInstances())
           .thenReturn(new Long(failed1Instances.size()));
       ComponentInstance.handleComponentInstanceRelaunch(component1Instance,
-          componentInstanceEvent, false);
+          componentInstanceEvent, false, containerDiag);
     }
 
     verify(comp, never()).markAsSucceeded(any(ComponentInstance.class));
@@ -458,7 +636,7 @@ public class TestComponentInstance {
       when(component2Instance.getComponent().getNumSucceededInstances())
           .thenReturn(new Long(succeeded2Instances.size()));
       ComponentInstance.handleComponentInstanceRelaunch(component2Instance,
-          componentInstanceEvent, false);
+          componentInstanceEvent, false, containerDiag);
     }
 
     Map<String, ComponentInstance> succeeded1Instances = new HashMap<>();
@@ -471,7 +649,7 @@ public class TestComponentInstance {
       when(component1Instance.getComponent().getNumSucceededInstances())
           .thenReturn(new Long(succeeded1Instances.size()));
       ComponentInstance.handleComponentInstanceRelaunch(component1Instance,
-          componentInstanceEvent, false);
+          componentInstanceEvent, false, containerDiag);
     }
 
     verify(comp, times(2)).markAsSucceeded(any(ComponentInstance.class));
@@ -500,7 +678,7 @@ public class TestComponentInstance {
 
     for (ComponentInstance component2Instance : component2Instances) {
       ComponentInstance.handleComponentInstanceRelaunch(component2Instance,
-          componentInstanceEvent, false);
+          componentInstanceEvent, false, containerDiag);
     }
 
     succeeded1Instances = new HashMap<>();
@@ -511,7 +689,7 @@ public class TestComponentInstance {
       when(component1Instance.getComponent().getSucceededInstances())
           .thenReturn(succeeded1Instances.values());
       ComponentInstance.handleComponentInstanceRelaunch(component1Instance,
-          componentInstanceEvent, false);
+          componentInstanceEvent, false, containerDiag);
     }
 
     verify(comp, times(2)).markAsSucceeded(any(ComponentInstance.class));

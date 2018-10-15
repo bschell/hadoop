@@ -21,13 +21,14 @@ package org.apache.hadoop.ozone;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
+import org.apache.hadoop.hdds.scm.container.common.helpers.PipelineID;
 import org.apache.hadoop.ozone.container.common.SCMTestUtils;
 import org.apache.hadoop.ozone.container.common.helpers.ContainerUtils;
 import org.apache.hadoop.ozone.container.common.statemachine.DatanodeStateMachine;
 import org.apache.hadoop.ozone.container.ozoneimpl.TestOzoneContainer;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.scm.TestUtils;
-import org.apache.hadoop.hdds.scm.XceiverClient;
+import org.apache.hadoop.hdds.scm.XceiverClientGrpc;
 import org.apache.hadoop.hdds.scm.container.common.helpers.Pipeline;
 import org.apache.hadoop.test.PathUtils;
 import org.apache.hadoop.test.TestGenericTestUtils;
@@ -95,11 +96,11 @@ public class TestMiniOzoneCluster {
           new Pipeline(datanodeDetails.getUuidString(),
               HddsProtos.LifeCycleState.OPEN,
               HddsProtos.ReplicationType.STAND_ALONE,
-              HddsProtos.ReplicationFactor.ONE, "test");
+              HddsProtos.ReplicationFactor.ONE, PipelineID.randomId());
       pipeline.addMember(datanodeDetails);
 
       // Verify client is able to connect to the container
-      try (XceiverClient client = new XceiverClient(pipeline, conf)){
+      try (XceiverClientGrpc client = new XceiverClientGrpc(pipeline, conf)){
         client.connect();
         assertTrue(client.isConnected());
       }

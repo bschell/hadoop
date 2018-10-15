@@ -18,9 +18,15 @@
 
 package org.apache.hadoop.ozone.container.keyvalue;
 
-import com.google.common.base.Preconditions;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.Map;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.fs.FileUtil;
@@ -28,6 +34,9 @@ import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .ContainerLifeCycleState;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .ContainerType;
+import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
+import org.apache.hadoop.hdds.protocol.proto
+    .StorageContainerDatanodeProtocolProtos;
 import org.apache.hadoop.hdds.scm.container.common.helpers
     .StorageContainerException;
 import org.apache.hadoop.io.nativeio.NativeIO;
@@ -35,31 +44,26 @@ import org.apache.hadoop.ozone.OzoneConfigKeys;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.container.common.helpers.ContainerUtils;
 import org.apache.hadoop.ozone.container.common.impl.ContainerDataYaml;
-import org.apache.hadoop.ozone.container.common.volume.VolumeSet;
-import org.apache.hadoop.ozone.container.common.volume.HddsVolume;
 import org.apache.hadoop.ozone.container.common.interfaces.Container;
+import org.apache.hadoop.ozone.container.common.interfaces.ContainerPacker;
 import org.apache.hadoop.ozone.container.common.interfaces.VolumeChoosingPolicy;
-import org.apache.hadoop.ozone.container.keyvalue.helpers.KeyUtils;
+import org.apache.hadoop.ozone.container.common.volume.HddsVolume;
+import org.apache.hadoop.ozone.container.common.volume.VolumeSet;
+import org.apache.hadoop.ozone.container.keyvalue.helpers.BlockUtils;
 import org.apache.hadoop.ozone.container.keyvalue.helpers
     .KeyValueContainerLocationUtil;
 import org.apache.hadoop.ozone.container.keyvalue.helpers.KeyValueContainerUtil;
 import org.apache.hadoop.util.DiskChecker.DiskOutOfSpaceException;
 import org.apache.hadoop.utils.MetadataStore;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.io.IOException;
-
-import java.util.Map;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-
+import com.google.common.base.Preconditions;
+import org.apache.commons.io.FileUtils;
 import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .Result.CONTAINER_ALREADY_EXISTS;
 import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
-    .Result.CONTAINER_INTERNAL_ERROR;
-import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .Result.CONTAINER_FILES_CREATE_ERROR;
+import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
+    .Result.CONTAINER_INTERNAL_ERROR;
 import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .Result.DISK_OUT_OF_SPACE;
 import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
@@ -68,11 +72,13 @@ import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .Result.INVALID_CONTAINER_STATE;
 import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .Result.UNSUPPORTED_REQUEST;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Class to perform KeyValue Container operations.
  */
-public class KeyValueContainer implements Container {
+public class KeyValueContainer implements Container<KeyValueContainerData> {
 
   private static final Logger LOG = LoggerFactory.getLogger(Container.class);
 
@@ -102,9 +108,9 @@ public class KeyValueContainer implements Container {
     Preconditions.checkNotNull(scmId, "scmId cannot be null");
 
     File containerMetaDataPath = null;
-    //acquiring volumeset lock and container lock
-    volumeSet.acquireLock();
-    long maxSize = (containerData.getMaxSizeGB() * 1024L * 1024L * 1024L);
+    //acquiring volumeset read lock
+    volumeSet.readLock();
+    long maxSize = containerData.getMaxSize();
     try {
       HddsVolume containerVolume = volumeChoosingPolicy.chooseVolume(volumeSet
           .getVolumesList(), maxSize);
@@ -138,7 +144,7 @@ public class KeyValueContainer implements Container {
 
       // Create .container file
       File containerFile = getContainerFile();
-      writeToContainerFile(containerFile, true);
+      createContainerFile(containerFile);
 
     } catch (StorageContainerException ex) {
       if (containerMetaDataPath != null && containerMetaDataPath.getParentFile()
@@ -160,16 +166,44 @@ public class KeyValueContainer implements Container {
       throw new StorageContainerException("Container creation failed.", ex,
           CONTAINER_INTERNAL_ERROR);
     } finally {
-      volumeSet.releaseLock();
+      volumeSet.readUnlock();
     }
   }
 
   /**
-   * Creates .container file and checksum file.
+   * Set all of the path realted container data fields based on the name
+   * conventions.
    *
-   * @param containerFile
-   * @param isCreate true if we are creating a new container file and false if
-   *                we are updating an existing container file.
+   * @param scmId
+   * @param containerVolume
+   * @param hddsVolumeDir
+   */
+  public void populatePathFields(String scmId,
+      HddsVolume containerVolume, String hddsVolumeDir) {
+
+    long containerId = containerData.getContainerID();
+
+    File containerMetaDataPath = KeyValueContainerLocationUtil
+        .getContainerMetaDataPath(hddsVolumeDir, scmId, containerId);
+
+    File chunksPath = KeyValueContainerLocationUtil.getChunksLocationPath(
+        hddsVolumeDir, scmId, containerId);
+    File dbFile = KeyValueContainerLocationUtil.getContainerDBFile(
+        containerMetaDataPath, containerId);
+
+    //Set containerData for the KeyValueContainer.
+    containerData.setMetadataPath(containerMetaDataPath.getPath());
+    containerData.setChunksPath(chunksPath.getPath());
+    containerData.setDbFile(dbFile);
+    containerData.setVolume(containerVolume);
+  }
+
+  /**
+   * Writes to .container file.
+   *
+   * @param containerFile container file name
+   * @param isCreate True if creating a new file. False is updating an
+   *                 existing container file.
    * @throws StorageContainerException
    */
   private void writeToContainerFile(File containerFile, boolean isCreate)
@@ -181,19 +215,18 @@ public class KeyValueContainer implements Container {
       ContainerDataYaml.createContainerFile(
           ContainerType.KeyValueContainer, containerData, tempContainerFile);
 
+      // NativeIO.renameTo is an atomic function. But it might fail if the
+      // container file already exists. Hence, we handle the two cases
+      // separately.
       if (isCreate) {
-        // When creating a new container, .container file should not exist
-        // already.
         NativeIO.renameTo(tempContainerFile, containerFile);
       } else {
-        // When updating a container, the .container file should exist. If
-        // not, the container is in an inconsistent state.
         Files.move(tempContainerFile.toPath(), containerFile.toPath(),
             StandardCopyOption.REPLACE_EXISTING);
       }
 
     } catch (IOException ex) {
-      throw new StorageContainerException("Error during creation of " +
+      throw new StorageContainerException("Error while creating/ updating " +
           ".container file. ContainerID: " + containerId, ex,
           CONTAINER_FILES_CREATE_ERROR);
     } finally {
@@ -206,27 +239,14 @@ public class KeyValueContainer implements Container {
     }
   }
 
+  private void createContainerFile(File containerFile)
+      throws StorageContainerException {
+    writeToContainerFile(containerFile, true);
+  }
 
   private void updateContainerFile(File containerFile)
       throws StorageContainerException {
-
-    long containerId = containerData.getContainerID();
-
-    if (!containerFile.exists()) {
-      throw new StorageContainerException("Container is an Inconsistent " +
-          "state, missing .container file. ContainerID: " + containerId,
-          INVALID_CONTAINER_STATE);
-    }
-
-    try {
-      writeToContainerFile(containerFile, false);
-    } catch (IOException e) {
-      //TODO : Container update failure is not handled currently. Might
-      // lead to loss of .container file. When Update container feature
-      // support is added, this failure should also be handled.
-      throw new StorageContainerException("Container update failed. " +
-          "ContainerID: " + containerId, CONTAINER_FILES_CREATE_ERROR);
-    }
+    writeToContainerFile(containerFile, false);
   }
 
 
@@ -256,19 +276,15 @@ public class KeyValueContainer implements Container {
     // complete this action
     try {
       writeLock();
-      long containerId = containerData.getContainerID();
-      if(!containerData.isValid()) {
-        LOG.debug("Invalid container data. Container Id: {}", containerId);
-        throw new StorageContainerException("Invalid container data. " +
-            "ContainerID: " + containerId, INVALID_CONTAINER_STATE);
-      }
+
       containerData.closeContainer();
       File containerFile = getContainerFile();
-
       // update the new container data to .container File
       updateContainerFile(containerFile);
 
     } catch (StorageContainerException ex) {
+      // Failed to update .container file. Reset the state to CLOSING
+      containerData.setState(ContainerLifeCycleState.CLOSING);
       throw ex;
     } finally {
       writeUnlock();
@@ -277,7 +293,7 @@ public class KeyValueContainer implements Container {
     // It is ok if this operation takes a bit of time.
     // Close container is not expected to be instantaneous.
     try {
-      MetadataStore db = KeyUtils.getDB(containerData, config);
+      MetadataStore db = BlockUtils.getDB(containerData, config);
       db.compactDB();
     } catch (StorageContainerException ex) {
       throw ex;
@@ -332,8 +348,6 @@ public class KeyValueContainer implements Container {
       // update the new container data to .container File
       updateContainerFile(containerFile);
     } catch (StorageContainerException  ex) {
-      // TODO:
-      // On error, reset the metadata.
       containerData.setMetadata(oldMetadata);
       throw ex;
     } finally {
@@ -350,6 +364,75 @@ public class KeyValueContainer implements Container {
   public KeyValueBlockIterator blockIterator() throws IOException{
     return new KeyValueBlockIterator(containerData.getContainerID(), new File(
         containerData.getContainerPath()));
+  }
+
+  @Override
+  public void importContainerData(InputStream input,
+      ContainerPacker<KeyValueContainerData> packer) throws IOException {
+    writeLock();
+    try {
+      if (getContainerFile().exists()) {
+        String errorMessage = String.format(
+            "Can't import container (cid=%d) data to a specific location"
+                + " as the container descriptor (%s) has already been exist.",
+            getContainerData().getContainerID(),
+            getContainerFile().getAbsolutePath());
+        throw new IOException(errorMessage);
+      }
+      //copy the values from the input stream to the final destination
+      // directory.
+      byte[] descriptorContent = packer.unpackContainerData(this, input);
+
+      Preconditions.checkNotNull(descriptorContent,
+          "Container descriptor is missing from the container archive: "
+              + getContainerData().getContainerID());
+
+      //now, we have extracted the container descriptor from the previous
+      //datanode. We can load it and upload it with the current data
+      // (original metadata + current filepath fields)
+      KeyValueContainerData originalContainerData =
+          (KeyValueContainerData) ContainerDataYaml
+              .readContainer(descriptorContent);
+
+
+      containerData.setState(originalContainerData.getState());
+      containerData
+          .setContainerDBType(originalContainerData.getContainerDBType());
+      containerData.setBytesUsed(originalContainerData.getBytesUsed());
+
+      //rewriting the yaml file with new checksum calculation.
+      update(originalContainerData.getMetadata(), true);
+
+      //fill in memory stat counter (keycount, byte usage)
+      KeyValueContainerUtil.parseKVContainerData(containerData, config);
+
+    } catch (Exception ex) {
+      //delete all the temporary data in case of any exception.
+      try {
+        FileUtils.deleteDirectory(new File(containerData.getMetadataPath()));
+        FileUtils.deleteDirectory(new File(containerData.getChunksPath()));
+        FileUtils.deleteDirectory(getContainerFile());
+      } catch (Exception deleteex) {
+        LOG.error(
+            "Can not cleanup destination directories after a container import"
+                + " error (cid" +
+                containerData.getContainerID() + ")", deleteex);
+      }
+      throw ex;
+    } finally {
+      writeUnlock();
+    }
+  }
+
+  @Override
+  public void exportContainerData(OutputStream destination,
+      ContainerPacker<KeyValueContainerData> packer) throws IOException {
+    if (getContainerData().getState() != ContainerLifeCycleState.CLOSED) {
+      throw new IllegalStateException(
+          "Only closed containers could be exported: ContainerId="
+              + getContainerData().getContainerID());
+    }
+    packer.pack(this, destination);
   }
 
   /**
@@ -423,6 +506,58 @@ public class KeyValueContainer implements Container {
   public File getContainerFile() {
     return new File(containerData.getMetadataPath(), containerData
         .getContainerID() + OzoneConsts.CONTAINER_EXTENSION);
+  }
+
+  @Override
+  public void updateBlockCommitSequenceId(long blockCommitSequenceId) {
+    containerData.updateBlockCommitSequenceId(blockCommitSequenceId);
+  }
+
+
+  /**
+   * Returns KeyValueContainerReport for the KeyValueContainer.
+   */
+  @Override
+  public StorageContainerDatanodeProtocolProtos.ContainerInfo
+      getContainerReport() throws StorageContainerException{
+    StorageContainerDatanodeProtocolProtos.ContainerInfo.Builder ciBuilder =
+        StorageContainerDatanodeProtocolProtos.ContainerInfo.newBuilder();
+    ciBuilder.setContainerID(containerData.getContainerID())
+        .setReadCount(containerData.getReadCount())
+        .setWriteCount(containerData.getWriteCount())
+        .setReadBytes(containerData.getReadBytes())
+        .setWriteBytes(containerData.getWriteBytes())
+        .setKeyCount(containerData.getKeyCount())
+        .setUsed(containerData.getBytesUsed())
+        .setState(getHddsState())
+        .setDeleteTransactionId(containerData.getDeleteTransactionId())
+        .setBlockCommitSequenceId(containerData.getBlockCommitSequenceId());
+    return ciBuilder.build();
+  }
+
+  /**
+   * Returns LifeCycle State of the container.
+   * @return LifeCycle State of the container in HddsProtos format
+   * @throws StorageContainerException
+   */
+  private HddsProtos.LifeCycleState getHddsState()
+      throws StorageContainerException {
+    HddsProtos.LifeCycleState state;
+    switch (containerData.getState()) {
+    case OPEN:
+      state = HddsProtos.LifeCycleState.OPEN;
+      break;
+    case CLOSING:
+      state = HddsProtos.LifeCycleState.CLOSING;
+      break;
+    case CLOSED:
+      state = HddsProtos.LifeCycleState.CLOSED;
+      break;
+    default:
+      throw new StorageContainerException("Invalid Container state found: " +
+          containerData.getContainerID(), INVALID_CONTAINER_STATE);
+    }
+    return state;
   }
 
   /**

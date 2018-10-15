@@ -22,8 +22,6 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto
-    .StorageContainerDatanodeProtocolProtos.ContainerInfo;
-import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.ContainerAction;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.CommandStatusReportsProto;
@@ -79,7 +77,7 @@ public class TestHeartbeatEndpointTask {
     Assert.assertTrue(heartbeat.hasDatanodeDetails());
     Assert.assertFalse(heartbeat.hasNodeReport());
     Assert.assertFalse(heartbeat.hasContainerReport());
-    Assert.assertFalse(heartbeat.hasCommandStatusReport());
+    Assert.assertTrue(heartbeat.getCommandStatusReportsCount() == 0);
     Assert.assertFalse(heartbeat.hasContainerActions());
   }
 
@@ -110,7 +108,7 @@ public class TestHeartbeatEndpointTask {
     Assert.assertTrue(heartbeat.hasDatanodeDetails());
     Assert.assertTrue(heartbeat.hasNodeReport());
     Assert.assertFalse(heartbeat.hasContainerReport());
-    Assert.assertFalse(heartbeat.hasCommandStatusReport());
+    Assert.assertTrue(heartbeat.getCommandStatusReportsCount() == 0);
     Assert.assertFalse(heartbeat.hasContainerActions());
   }
 
@@ -141,7 +139,7 @@ public class TestHeartbeatEndpointTask {
     Assert.assertTrue(heartbeat.hasDatanodeDetails());
     Assert.assertFalse(heartbeat.hasNodeReport());
     Assert.assertTrue(heartbeat.hasContainerReport());
-    Assert.assertFalse(heartbeat.hasCommandStatusReport());
+    Assert.assertTrue(heartbeat.getCommandStatusReportsCount() == 0);
     Assert.assertFalse(heartbeat.hasContainerActions());
   }
 
@@ -172,7 +170,7 @@ public class TestHeartbeatEndpointTask {
     Assert.assertTrue(heartbeat.hasDatanodeDetails());
     Assert.assertFalse(heartbeat.hasNodeReport());
     Assert.assertFalse(heartbeat.hasContainerReport());
-    Assert.assertTrue(heartbeat.hasCommandStatusReport());
+    Assert.assertTrue(heartbeat.getCommandStatusReportsCount() != 0);
     Assert.assertFalse(heartbeat.hasContainerActions());
   }
 
@@ -203,7 +201,7 @@ public class TestHeartbeatEndpointTask {
     Assert.assertTrue(heartbeat.hasDatanodeDetails());
     Assert.assertFalse(heartbeat.hasNodeReport());
     Assert.assertFalse(heartbeat.hasContainerReport());
-    Assert.assertFalse(heartbeat.hasCommandStatusReport());
+    Assert.assertTrue(heartbeat.getCommandStatusReportsCount() == 0);
     Assert.assertTrue(heartbeat.hasContainerActions());
   }
 
@@ -237,7 +235,7 @@ public class TestHeartbeatEndpointTask {
     Assert.assertTrue(heartbeat.hasDatanodeDetails());
     Assert.assertTrue(heartbeat.hasNodeReport());
     Assert.assertTrue(heartbeat.hasContainerReport());
-    Assert.assertTrue(heartbeat.hasCommandStatusReport());
+    Assert.assertTrue(heartbeat.getCommandStatusReportsCount() != 0);
     Assert.assertTrue(heartbeat.hasContainerActions());
   }
 

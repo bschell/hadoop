@@ -102,8 +102,8 @@ import org.apache.hadoop.hdfs.protocol.SnapshottableDirectoryStatus;
 import org.apache.hadoop.hdfs.security.token.delegation.DelegationTokenIdentifier;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.net.NetUtils;
-import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.token.Token;
+import org.apache.hadoop.security.token.DelegationTokenIssuer;
 import org.apache.hadoop.util.ChunkedArrayList;
 import org.apache.hadoop.util.Progressable;
 
@@ -149,7 +149,6 @@ public class DistributedFileSystem extends FileSystem
 
   /**
    * Return the protocol scheme for the FileSystem.
-   * <p/>
    *
    * @return <code>hdfs</code>
    */
@@ -1217,7 +1216,11 @@ public class DistributedFileSystem extends FileSystem
       thisListing = dfs.listPaths(src, HdfsFileStatus.EMPTY_NAME,
           needLocation);
       statistics.incrementReadOps(1);
-      storageStatistics.incrementOpCounter(OpType.LIST_LOCATED_STATUS);
+      if (needLocation) {
+        storageStatistics.incrementOpCounter(OpType.LIST_LOCATED_STATUS);
+      } else {
+        storageStatistics.incrementOpCounter(OpType.LIST_STATUS);
+      }
       if (thisListing == null) { // the directory does not exist
         throw new FileNotFoundException("File " + p + " does not exist.");
       }
@@ -1856,7 +1859,7 @@ public class DistributedFileSystem extends FileSystem
     return setSafeMode(SafeModeAction.SAFEMODE_GET, true);
   }
 
-  /** @see HdfsAdmin#allowSnapshot(Path) */
+  /** @see org.apache.hadoop.hdfs.client.HdfsAdmin#allowSnapshot(Path) */
   public void allowSnapshot(final Path path) throws IOException {
     statistics.incrementWriteOps(1);
     storageStatistics.incrementOpCounter(OpType.ALLOW_SNAPSHOT);
@@ -1884,7 +1887,7 @@ public class DistributedFileSystem extends FileSystem
     }.resolve(this, absF);
   }
 
-  /** @see HdfsAdmin#disallowSnapshot(Path) */
+  /** @see org.apache.hadoop.hdfs.client.HdfsAdmin#disallowSnapshot(Path) */
   public void disallowSnapshot(final Path path) throws IOException {
     statistics.incrementWriteOps(1);
     storageStatistics.incrementOpCounter(OpType.DISALLOW_SNAPSHOT);
@@ -2203,7 +2206,7 @@ public class DistributedFileSystem extends FileSystem
   }
 
   /**
-   * @see {@link #addCacheDirective(CacheDirectiveInfo, EnumSet)}
+   * @see #addCacheDirective(CacheDirectiveInfo, EnumSet)
    */
   public long addCacheDirective(CacheDirectiveInfo info) throws IOException {
     return addCacheDirective(info, EnumSet.noneOf(CacheFlag.class));
@@ -2230,7 +2233,7 @@ public class DistributedFileSystem extends FileSystem
   }
 
   /**
-   * @see {@link #modifyCacheDirective(CacheDirectiveInfo, EnumSet)}
+   * @see #modifyCacheDirective(CacheDirectiveInfo, EnumSet)
    */
   public void modifyCacheDirective(CacheDirectiveInfo info) throws IOException {
     modifyCacheDirective(info, EnumSet.noneOf(CacheFlag.class));
@@ -2815,11 +2818,13 @@ public class DistributedFileSystem extends FileSystem
   }
 
   @Override
-  public Token<?>[] addDelegationTokens(
-      final String renewer, Credentials credentials) throws IOException {
-    Token<?>[] tokens = super.addDelegationTokens(renewer, credentials);
-    return HdfsKMSUtil.addDelegationTokensForKeyProvider(
-        this, renewer, credentials, uri, tokens);
+  public DelegationTokenIssuer[] getAdditionalTokenIssuers()
+      throws IOException {
+    KeyProvider keyProvider = getKeyProvider();
+    if (keyProvider instanceof DelegationTokenIssuer) {
+      return new DelegationTokenIssuer[]{(DelegationTokenIssuer)keyProvider};
+    }
+    return null;
   }
 
   public DFSInotifyEventInputStream getInotifyEventStream() throws IOException {
@@ -2857,6 +2862,40 @@ public class DistributedFileSystem extends FileSystem
         }
         throw new UnsupportedOperationException(
             "Cannot setErasureCodingPolicy through a symlink to a "
+                + "non-DistributedFileSystem: " + path + " -> " + p);
+      }
+    }.resolve(this, absF);
+  }
+
+  /**
+   * Set the source path to satisfy storage policy. This API is non-recursive
+   * in nature, i.e., if the source path is a directory then all the files
+   * immediately under the directory would be considered for satisfying the
+   * policy and the sub-directories if any under this path will be skipped.
+   *
+   * @param path The source path referring to either a directory or a file.
+   * @throws IOException
+   */
+  public void satisfyStoragePolicy(final Path path) throws IOException {
+    Path absF = fixRelativePart(path);
+    new FileSystemLinkResolver<Void>() {
+
+      @Override
+      public Void doCall(Path p) throws IOException {
+        dfs.satisfyStoragePolicy(getPathName(p));
+        return null;
+      }
+
+      @Override
+      public Void next(FileSystem fs, Path p) throws IOException {
+        // DFS only
+        if (fs instanceof  DistributedFileSystem) {
+          DistributedFileSystem myDfs = (DistributedFileSystem) fs;
+          myDfs.satisfyStoragePolicy(p);
+          return null;
+        }
+        throw new UnsupportedOperationException(
+            "Cannot satisfyStoragePolicy through a symlink to a "
                 + "non-DistributedFileSystem: " + path + " -> " + p);
       }
     }.resolve(this, absF);
@@ -3267,10 +3306,10 @@ public class DistributedFileSystem extends FileSystem
    * Returns a RemoteIterator which can be used to list all open files
    * currently managed by the NameNode. For large numbers of open files,
    * iterator will fetch the list in batches of configured size.
-   * <p/>
+   * <p>
    * Since the list is fetched in batches, it does not represent a
    * consistent snapshot of the all open files.
-   * <p/>
+   * <p>
    * This method can only be called by HDFS superusers.
    */
   @Deprecated

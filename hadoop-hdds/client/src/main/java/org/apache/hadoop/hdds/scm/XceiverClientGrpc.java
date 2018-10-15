@@ -31,14 +31,13 @@ import org.apache.hadoop.hdds.scm.client.HddsClientUtils;
 import org.apache.hadoop.hdds.scm.container.common.helpers.Pipeline;
 import org.apache.hadoop.ozone.OzoneConfigKeys;
 import org.apache.hadoop.util.Time;
-import org.apache.ratis.shaded.io.grpc.ManagedChannel;
-import org.apache.ratis.shaded.io.grpc.netty.NettyChannelBuilder;
-import org.apache.ratis.shaded.io.grpc.stub.StreamObserver;
+import org.apache.ratis.thirdparty.io.grpc.ManagedChannel;
+import org.apache.ratis.thirdparty.io.grpc.netty.NettyChannelBuilder;
+import org.apache.ratis.thirdparty.io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
@@ -88,7 +87,7 @@ public class XceiverClientGrpc extends XceiverClientSpi {
     }
     LOG.debug("Connecting to server Port : " + leader.getIpAddress());
     channel = NettyChannelBuilder.forAddress(leader.getIpAddress(), port)
-        .usePlaintext(true)
+        .usePlaintext()
         .maxInboundMessageSize(OzoneConfigKeys.DFS_CONTAINER_CHUNK_MAX_SIZE)
         .build();
     asyncStub = XceiverClientProtocolServiceGrpc.newStub(channel);
@@ -119,29 +118,6 @@ public class XceiverClientGrpc extends XceiverClientSpi {
   @Override
   public Pipeline getPipeline() {
     return pipeline;
-  }
-
-  @Override
-  public ContainerCommandResponseProto sendCommand(
-      ContainerCommandRequestProto request) throws IOException {
-    try {
-      return sendCommandAsync(request).get();
-    } catch (ExecutionException | InterruptedException e) {
-      /**
-       * In case the grpc channel handler throws an exception,
-       * the exception thrown will be wrapped within {@link ExecutionException}.
-       * Unwarpping here so that original exception gets passed
-       * to to the client.
-       */
-      if (e instanceof ExecutionException) {
-        Throwable cause = e.getCause();
-        if (cause instanceof IOException) {
-          throw (IOException) cause;
-        }
-      }
-      throw new IOException(
-          "Unexpected exception during execution:" + e.getMessage());
-    }
   }
 
   /**
@@ -217,15 +193,14 @@ public class XceiverClientGrpc extends XceiverClientSpi {
 
   /**
    * Create a pipeline.
-   *
-   * @param pipelineID - Name of the pipeline.
-   * @param datanodes - Datanodes
    */
   @Override
-  public void createPipeline(String pipelineID, List<DatanodeDetails> datanodes)
-      throws IOException {
+  public void createPipeline() {
     // For stand alone pipeline, there is no notion called setup pipeline.
-    return;
+  }
+
+  public void destroyPipeline() {
+    // For stand alone pipeline, there is no notion called destroy pipeline.
   }
 
   /**

@@ -22,15 +22,7 @@ import com.google.common.collect.Sets;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
-import org.apache.hadoop.yarn.api.records.ApplicationId;
-import org.apache.hadoop.yarn.api.records.Container;
-import org.apache.hadoop.yarn.api.records.ContainerId;
-import org.apache.hadoop.yarn.api.records.NodeId;
-import org.apache.hadoop.yarn.api.records.Priority;
-import org.apache.hadoop.yarn.api.records.Resource;
-import org.apache.hadoop.yarn.api.records.ResourceInformation;
-import org.apache.hadoop.yarn.api.records.ResourceRequest;
+import org.apache.hadoop.yarn.api.records.*;
 import org.apache.hadoop.yarn.event.Dispatcher;
 import org.apache.hadoop.yarn.event.Event;
 import org.apache.hadoop.yarn.event.EventHandler;
@@ -204,7 +196,14 @@ public class TestUtils {
     ApplicationId applicationId = BuilderUtils.newApplicationId(0l, appId);
     return ApplicationAttemptId.newInstance(applicationId, attemptId);
   }
-  
+
+  public static FiCaSchedulerNode getMockNodeWithAttributes(String host,
+      String rack, int port, int memory, Set<NodeAttribute> attributes) {
+    FiCaSchedulerNode node = getMockNode(host, rack, port, memory, 1);
+    when(node.getNodeAttributes()).thenReturn(attributes);
+    return node;
+  }
+
   public static FiCaSchedulerNode getMockNode(String host, String rack,
       int port, int memory) {
     return getMockNode(host, rack, port, memory, 1);
@@ -220,6 +219,7 @@ public class TestUtils {
     when(rmNode.getNodeAddress()).thenReturn(host+":"+port);
     when(rmNode.getHostName()).thenReturn(host);
     when(rmNode.getRackName()).thenReturn(rack);
+    when(rmNode.getState()).thenReturn(NodeState.RUNNING);
     
     FiCaSchedulerNode node = spy(new FiCaSchedulerNode(rmNode, false));
     LOG.info("node = " + host + " avail=" + node.getUnallocatedResource());

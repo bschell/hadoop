@@ -58,7 +58,8 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
   }
 
   private HddsProtos.LifeCycleState state;
-  private String pipelineName;
+  @JsonIgnore
+  private PipelineID pipelineID;
   private ReplicationFactor replicationFactor;
   private ReplicationType replicationType;
   // Bytes allocated by SCM for clients.
@@ -82,7 +83,7 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
   ContainerInfo(
       long containerID,
       HddsProtos.LifeCycleState state,
-      String pipelineName,
+      PipelineID pipelineID,
       long allocatedBytes,
       long usedBytes,
       long numberOfKeys,
@@ -92,7 +93,7 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
       ReplicationFactor replicationFactor,
       ReplicationType repType) {
     this.containerID = containerID;
-    this.pipelineName = pipelineName;
+    this.pipelineID = pipelineID;
     this.allocatedBytes = allocatedBytes;
     this.usedBytes = usedBytes;
     this.numberOfKeys = numberOfKeys;
@@ -105,6 +106,13 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
     this.replicationType = repType;
   }
 
+  public ContainerInfo(ContainerInfo info) {
+    this(info.getContainerID(), info.getState(), info.getPipelineID(),
+        info.getAllocatedBytes(), info.getUsedBytes(), info.getNumberOfKeys(),
+        info.getStateEnterTime(), info.getOwner(),
+        info.getDeleteTransactionId(), info.getReplicationFactor(),
+        info.getReplicationType());
+  }
   /**
    * Needed for serialization findbugs.
    */
@@ -113,7 +121,8 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
 
   public static ContainerInfo fromProtobuf(HddsProtos.SCMContainerInfo info) {
     ContainerInfo.Builder builder = new ContainerInfo.Builder();
-    return builder.setPipelineName(info.getPipelineName())
+    return builder.setPipelineID(
+        PipelineID.getFromProtobuf(info.getPipelineID()))
         .setAllocatedBytes(info.getAllocatedBytes())
         .setUsedBytes(info.getUsedBytes())
         .setNumberOfKeys(info.getNumberOfKeys())
@@ -147,8 +156,8 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
     return replicationFactor;
   }
 
-  public String getPipelineName() {
-    return pipelineName;
+  public PipelineID getPipelineID() {
+    return pipelineID;
   }
 
   public long getAllocatedBytes() {
@@ -211,13 +220,14 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
   public HddsProtos.SCMContainerInfo getProtobuf() {
     HddsProtos.SCMContainerInfo.Builder builder =
         HddsProtos.SCMContainerInfo.newBuilder();
+    Preconditions.checkState(containerID > 0);
     return builder.setAllocatedBytes(getAllocatedBytes())
         .setContainerID(getContainerID())
         .setUsedBytes(getUsedBytes())
         .setNumberOfKeys(getNumberOfKeys()).setState(getState())
         .setStateEnterTime(getStateEnterTime()).setContainerID(getContainerID())
         .setDeleteTransactionId(getDeleteTransactionId())
-        .setPipelineName(getPipelineName())
+        .setPipelineID(getPipelineID().getProtobuf())
         .setReplicationFactor(getReplicationFactor())
         .setReplicationType(getReplicationType())
         .setOwner(getOwner())
@@ -235,8 +245,9 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
   @Override
   public String toString() {
     return "ContainerInfo{"
-        + "state=" + state
-        + ", pipelineName=" + pipelineName
+        + "id=" + containerID
+        + ", state=" + state
+        + ", pipelineID=" + pipelineID
         + ", stateEnterTime=" + stateEnterTime
         + ", owner=" + owner
         + '}';
@@ -389,18 +400,18 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
     private String owner;
     private long containerID;
     private long deleteTransactionId;
-    private String pipelineName;
+    private PipelineID pipelineID;
     private ReplicationFactor replicationFactor;
     private ReplicationType replicationType;
 
     public Builder setReplicationType(
-        ReplicationType replicationType) {
-      this.replicationType = replicationType;
+        ReplicationType repType) {
+      this.replicationType = repType;
       return this;
     }
 
-    public Builder setPipelineName(String pipelineName) {
-      this.pipelineName = pipelineName;
+    public Builder setPipelineID(PipelineID pipelineId) {
+      this.pipelineID = pipelineId;
       return this;
     }
 
@@ -445,13 +456,13 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
       return this;
     }
 
-    public Builder setDeleteTransactionId(long deleteTransactionId) {
-      this.deleteTransactionId = deleteTransactionId;
+    public Builder setDeleteTransactionId(long deleteTransactionID) {
+      this.deleteTransactionId = deleteTransactionID;
       return this;
     }
 
     public ContainerInfo build() {
-      return new ContainerInfo(containerID, state, pipelineName, allocated,
+      return new ContainerInfo(containerID, state, pipelineID, allocated,
               used, keys, stateEnterTime, owner, deleteTransactionId,
           replicationFactor, replicationType);
     }

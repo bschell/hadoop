@@ -40,8 +40,8 @@ import java.util.concurrent.TimeUnit;
 
 import com.google.common.base.Joiner;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.ReconfigurationTaskStatus;
@@ -114,7 +114,7 @@ public class DFSAdmin extends FsShell {
     HdfsConfiguration.init();
   }
   
-  private static final Log LOG = LogFactory.getLog(DFSAdmin.class);
+  private static final Logger LOG = LoggerFactory.getLogger(DFSAdmin.class);
 
   /**
    * An abstract class for the execution of a file system command
@@ -549,6 +549,11 @@ public class DFSAdmin extends FsShell {
         replicatedBlockStats.getMissingReplicaBlocks());
     System.out.println("\tMissing blocks (with replication factor 1): " +
         replicatedBlockStats.getMissingReplicationOneBlocks());
+    if (replicatedBlockStats.hasHighestPriorityLowRedundancyBlocks()) {
+      System.out.println("\tLow redundancy blocks with highest priority " +
+          "to recover: " +
+          replicatedBlockStats.getHighestPriorityLowRedundancyBlocks());
+    }
     System.out.println("\tPending deletion blocks: " +
         replicatedBlockStats.getPendingDeletionBlocks());
 
@@ -561,6 +566,11 @@ public class DFSAdmin extends FsShell {
         ecBlockGroupStats.getCorruptBlockGroups());
     System.out.println("\tMissing block groups: " +
         ecBlockGroupStats.getMissingBlockGroups());
+    if (ecBlockGroupStats.hasHighestPriorityLowRedundancyBlocks()) {
+      System.out.println("\tLow redundancy blocks with highest priority " +
+          "to recover: " +
+          ecBlockGroupStats.getHighestPriorityLowRedundancyBlocks());
+    }
     System.out.println("\tPending deletion blocks: " +
         ecBlockGroupStats.getPendingDeletionBlocks());
 

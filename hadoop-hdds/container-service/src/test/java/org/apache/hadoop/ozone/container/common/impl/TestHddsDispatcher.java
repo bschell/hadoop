@@ -40,7 +40,7 @@ import org.apache.hadoop.ozone.container.common.volume.VolumeSet;
 import org.apache.hadoop.ozone.container.keyvalue.KeyValueContainer;
 import org.apache.hadoop.ozone.container.keyvalue.KeyValueContainerData;
 import org.apache.hadoop.test.GenericTestUtils;
-import org.apache.ratis.shaded.com.google.protobuf.ByteString;
+import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.junit.Assert;
 import org.junit.Test;
 import org.mockito.Mockito;
@@ -70,7 +70,8 @@ public class TestHddsDispatcher {
       ContainerSet containerSet = new ContainerSet();
       VolumeSet volumeSet = new VolumeSet(dd.getUuidString(), conf);
       StateContext context = Mockito.mock(StateContext.class);
-      KeyValueContainerData containerData = new KeyValueContainerData(1L, 1);
+      KeyValueContainerData containerData = new KeyValueContainerData(1L,
+          (long) StorageUnit.GB.toBytes(1));
       Container container = new KeyValueContainer(containerData, conf);
       container.create(volumeSet, new RoundRobinVolumeChoosingPolicy(),
           scmId.toString());

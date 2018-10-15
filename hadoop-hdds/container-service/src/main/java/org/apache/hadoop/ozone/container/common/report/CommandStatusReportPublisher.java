@@ -58,7 +58,7 @@ public class CommandStatusReportPublisher extends
           getConf());
 
       Preconditions.checkState(
-          heartbeatFrequency < cmdStatusReportInterval,
+          heartbeatFrequency <= cmdStatusReportInterval,
           HDDS_COMMAND_STATUS_REPORT_INTERVAL +
               " cannot be configured lower than heartbeat frequency.");
     }
@@ -82,6 +82,6 @@ public class CommandStatusReportPublisher extends
         map.remove(key);
       }
     });
-    return builder.build();
+    return builder.getCmdStatusCount() > 0 ? builder.build() : null;
   }
 }

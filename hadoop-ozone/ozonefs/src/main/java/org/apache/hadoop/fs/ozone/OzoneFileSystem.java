@@ -42,7 +42,6 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathIsNotEmptyDirectoryException;
-import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.ozone.client.ObjectStore;
 import org.apache.hadoop.ozone.client.OzoneBucket;
 import org.apache.hadoop.ozone.client.OzoneClient;
@@ -60,7 +59,6 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.Progressable;
-import org.apache.hadoop.ozone.client.io.OzoneInputStream;
 import org.apache.hadoop.ozone.client.io.OzoneOutputStream;
 
 import static org.apache.hadoop.fs.ozone.Constants.OZONE_DEFAULT_USER;
@@ -450,6 +448,14 @@ public class OzoneFileSystem extends FileSystem {
   }
 
   /**
+   * Get the username of the FS.
+   * @return the short name of the user who instantiated the FS
+   */
+  public String getUsername() {
+    return userName;
+  }
+
+  /**
    * Check whether the path is valid and then create directories.
    * Directory is represented using a key with no value.
    * All the non-existent parent directories are also created.
@@ -530,11 +536,15 @@ public class OzoneFileSystem extends FileSystem {
       throw new FileNotFoundException(f + ": No such file or directory!");
     } else if (isDirectory(meta)) {
       return new FileStatus(0, true, 1, 0,
-          meta.getModificationTime(), qualifiedPath);
+          meta.getModificationTime(), 0,
+          FsPermission.getDirDefault(), getUsername(), getUsername(),
+          qualifiedPath);
     } else {
       //TODO: Fetch replication count from ratis config
       return new FileStatus(meta.getDataSize(), false, 1,
-            getDefaultBlockSize(f), meta.getModificationTime(), qualifiedPath);
+          getDefaultBlockSize(f), meta.getModificationTime(), 0,
+          FsPermission.getFileDefault(), getUsername(), getUsername(),
+          qualifiedPath);
     }
   }
 
@@ -640,7 +650,7 @@ public class OzoneFileSystem extends FileSystem {
     private final Path path;
     private final FileStatus status;
     private String pathKey;
-    private Iterator<OzoneKey> keyIterator;
+    private Iterator<? extends OzoneKey> keyIterator;
 
     OzoneListingIterator(Path path)
         throws IOException {

@@ -23,9 +23,16 @@ import com.google.common.primitives.Longs;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto
+    .StorageContainerDatanodeProtocolProtos.ContainerBlocksDeletionACKProto;
+import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.ContainerBlocksDeletionACKProto
     .DeleteBlockTransactionResult;
-import org.apache.hadoop.hdds.scm.container.Mapping;
+import org.apache.hadoop.hdds.scm.command
+    .CommandStatusReportHandler.DeleteBlockStatus;
+import org.apache.hadoop.hdds.scm.container.ContainerManager;
+import org.apache.hadoop.hdds.scm.container.common.helpers.Pipeline;
+import org.apache.hadoop.hdds.server.events.EventHandler;
+import org.apache.hadoop.hdds.server.events.EventPublisher;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction;
@@ -45,13 +52,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
+import static java.lang.Math.min;
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys
     .OZONE_SCM_BLOCK_DELETION_MAX_RETRY;
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys
@@ -73,9 +81,10 @@ import static org.apache.hadoop.ozone.OzoneConsts.DELETED_BLOCK_DB;
  * equally same chance to be retrieved which only depends on the nature
  * order of the transaction ID.
  */
-public class DeletedBlockLogImpl implements DeletedBlockLog {
+public class DeletedBlockLogImpl
+    implements DeletedBlockLog, EventHandler<DeleteBlockStatus> {
 
-  private static final Logger LOG =
+  public static final Logger LOG =
       LoggerFactory.getLogger(DeletedBlockLogImpl.class);
 
   private static final byte[] LATEST_TXID =
@@ -83,15 +92,15 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
 
   private final int maxRetry;
   private final MetadataStore deletedStore;
-  private final Mapping containerManager;
+  private final ContainerManager containerManager;
   private final Lock lock;
   // The latest id of deleted blocks in the db.
   private long lastTxID;
   // Maps txId to set of DNs which are successful in committing the transaction
   private Map<Long, Set<UUID>> transactionToDNsCommitMap;
 
-  public DeletedBlockLogImpl(Configuration conf, Mapping containerManager)
-      throws IOException {
+  public DeletedBlockLogImpl(Configuration conf,
+     ContainerManager containerManager) throws IOException {
     maxRetry = conf.getInt(OZONE_SCM_BLOCK_DELETION_MAX_RETRY,
         OZONE_SCM_BLOCK_DELETION_MAX_RETRY_DEFAULT);
 
@@ -121,7 +130,7 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
   }
 
   @VisibleForTesting
-  MetadataStore getDeletedStore() {
+  public MetadataStore getDeletedStore() {
     return deletedStore;
   }
 
@@ -230,7 +239,8 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
     lock.lock();
     try {
       Set<UUID> dnsWithCommittedTxn;
-      for (DeleteBlockTransactionResult transactionResult : transactionResults) {
+      for (DeleteBlockTransactionResult transactionResult :
+          transactionResults) {
         if (isTransactionFailed(transactionResult)) {
           continue;
         }
@@ -239,21 +249,26 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
           // set of dns which have successfully committed transaction txId.
           dnsWithCommittedTxn = transactionToDNsCommitMap.get(txID);
           Long containerId = transactionResult.getContainerID();
-          if (dnsWithCommittedTxn == null || containerId == null) {
-            LOG.warn("Transaction txId={} commit by dnId={} failed."
-                + " Corresponding entry not found.", txID, dnID);
+          if (dnsWithCommittedTxn == null) {
+            LOG.warn("Transaction txId={} commit by dnId={} for containerID={} "
+                    + "failed. Corresponding entry not found.", txID, dnID,
+                containerId);
             return;
           }
 
           dnsWithCommittedTxn.add(dnID);
-          Collection<DatanodeDetails> containerDnsDetails =
+          Pipeline pipeline =
               containerManager.getContainerWithPipeline(containerId)
-                  .getPipeline().getDatanodes().values();
+                  .getPipeline();
+          Collection<DatanodeDetails> containerDnsDetails =
+              pipeline.getDatanodes().values();
           // The delete entry can be safely removed from the log if all the
-          // corresponding nodes commit the txn.
-          if (dnsWithCommittedTxn.size() >= containerDnsDetails.size()) {
+          // corresponding nodes commit the txn. It is required to check that
+          // the nodes returned in the pipeline match the replication factor.
+          if (min(containerDnsDetails.size(), dnsWithCommittedTxn.size())
+              >= pipeline.getFactor().getNumber()) {
             List<UUID> containerDns = containerDnsDetails.stream()
-                .map(dnDetails -> dnDetails.getUuid())
+                .map(DatanodeDetails::getUuid)
                 .collect(Collectors.toList());
             if (dnsWithCommittedTxn.containsAll(containerDns)) {
               transactionToDNsCommitMap.remove(txID);
@@ -261,6 +276,8 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
               deletedStore.delete(Longs.toByteArray(txID));
             }
           }
+          LOG.debug("Datanode txId={} containerId={} committed by dnId={}",
+              txID, containerId, dnID);
         } catch (IOException e) {
           LOG.warn("Could not commit delete block transaction: " +
               transactionResult.getTxID(), e);
@@ -338,15 +355,13 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
    * {@inheritDoc}
    *
    * @param containerBlocksMap a map of containerBlocks.
-   * @return Mapping from containerId to latest transactionId for the container.
    * @throws IOException
    */
   @Override
-  public Map<Long, Long> addTransactions(
+  public void addTransactions(
       Map<Long, List<Long>> containerBlocksMap)
       throws IOException {
     BatchOperation batch = new BatchOperation();
-    Map<Long, Long> deleteTransactionsMap = new HashMap<>();
     lock.lock();
     try {
       long currentLatestID = lastTxID;
@@ -356,13 +371,11 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
         byte[] key = Longs.toByteArray(currentLatestID);
         DeletedBlocksTransaction tx = constructNewTransaction(currentLatestID,
             entry.getKey(), entry.getValue());
-        deleteTransactionsMap.put(entry.getKey(), currentLatestID);
         batch.put(key, tx.toByteArray());
       }
       lastTxID = currentLatestID;
       batch.put(LATEST_TXID, Longs.toByteArray(lastTxID));
       deletedStore.writeBatch(batch);
-      return deleteTransactionsMap;
     } finally {
       lock.unlock();
     }
@@ -376,10 +389,11 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
   }
 
   @Override
-  public void getTransactions(DatanodeDeletedBlockTransactions transactions)
-      throws IOException {
+  public Map<Long, Long> getTransactions(
+      DatanodeDeletedBlockTransactions transactions) throws IOException {
     lock.lock();
     try {
+      Map<Long, Long> deleteTransactionMap = new HashMap<>();
       deletedStore.iterate(null, (key, value) -> {
         if (!Arrays.equals(LATEST_TXID, key)) {
           DeletedBlocksTransaction block = DeletedBlocksTransaction
@@ -388,6 +402,7 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
           if (block.getCount() > -1 && block.getCount() <= maxRetry) {
             if (transactions.addTransaction(block,
                 transactionToDNsCommitMap.get(block.getTxID()))) {
+              deleteTransactionMap.put(block.getContainerID(), block.getTxID());
               transactionToDNsCommitMap
                   .putIfAbsent(block.getTxID(), new ConcurrentHashSet<>());
             }
@@ -396,8 +411,18 @@ public class DeletedBlockLogImpl implements DeletedBlockLog {
         }
         return true;
       });
+      return deleteTransactionMap;
     } finally {
       lock.unlock();
     }
+  }
+
+  @Override
+  public void onMessage(DeleteBlockStatus deleteBlockStatus,
+      EventPublisher publisher) {
+    ContainerBlocksDeletionACKProto ackProto =
+        deleteBlockStatus.getCmdStatus().getBlockDeletionAck();
+    commitTransactions(ackProto.getResultsList(),
+        UUID.fromString(ackProto.getDnId()));
   }
 }

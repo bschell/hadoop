@@ -30,8 +30,8 @@ import java.util.PriorityQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
@@ -65,7 +65,7 @@ import com.google.protobuf.TextFormat;
  */
 @InterfaceAudience.Private
 public class QuorumJournalManager implements JournalManager {
-  static final Log LOG = LogFactory.getLog(QuorumJournalManager.class);
+  static final Logger LOG = LoggerFactory.getLogger(QuorumJournalManager.class);
 
   // Timeouts for which the QJM will wait for each of the following actions.
   private final int startSegmentTimeoutMs;
@@ -124,8 +124,6 @@ public class QuorumJournalManager implements JournalManager {
     this.nsInfo = nsInfo;
     this.nameServiceId = nameServiceId;
     this.loggers = new AsyncLoggerSet(createLoggers(loggerFactory));
-    this.connectionFactory = URLConnectionFactory
-        .newDefaultURLConnectionFactory(conf);
 
     // Configure timeouts.
     this.startSegmentTimeoutMs = conf.getInt(
@@ -156,6 +154,15 @@ public class QuorumJournalManager implements JournalManager {
             .DFS_QJM_OPERATIONS_TIMEOUT,
         DFSConfigKeys.DFS_QJM_OPERATIONS_TIMEOUT_DEFAULT, TimeUnit
             .MILLISECONDS);
+
+    int connectTimeoutMs = conf.getInt(
+        DFSConfigKeys.DFS_QJOURNAL_HTTP_OPEN_TIMEOUT_KEY,
+        DFSConfigKeys.DFS_QJOURNAL_HTTP_OPEN_TIMEOUT_DEFAULT);
+    int readTimeoutMs = conf.getInt(
+        DFSConfigKeys.DFS_QJOURNAL_HTTP_READ_TIMEOUT_KEY,
+        DFSConfigKeys.DFS_QJOURNAL_HTTP_READ_TIMEOUT_DEFAULT);
+    this.connectionFactory = URLConnectionFactory
+        .newDefaultURLConnectionFactory(connectTimeoutMs, readTimeoutMs, conf);
   }
   
   protected List<AsyncLogger> createLoggers(
@@ -213,8 +220,8 @@ public class QuorumJournalManager implements JournalManager {
   }
   
   @Override
-  public void format(NamespaceInfo nsInfo) throws IOException {
-    QuorumCall<AsyncLogger,Void> call = loggers.format(nsInfo);
+  public void format(NamespaceInfo nsInfo, boolean force) throws IOException {
+    QuorumCall<AsyncLogger, Void> call = loggers.format(nsInfo, force);
     try {
       call.waitFor(loggers.size(), loggers.size(), 0, timeoutMs,
           "format");

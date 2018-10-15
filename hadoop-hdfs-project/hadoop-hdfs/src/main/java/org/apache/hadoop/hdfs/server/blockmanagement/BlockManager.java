@@ -47,6 +47,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+
 import javax.management.ObjectName;
 
 import org.apache.hadoop.HadoopIllegalArgumentException;
@@ -68,6 +69,7 @@ import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
 import org.apache.hadoop.hdfs.protocol.HdfsConstants.DatanodeReportType;
+import org.apache.hadoop.hdfs.protocol.HdfsConstants.StoragePolicySatisfierMode;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedStripedBlock;
@@ -91,6 +93,7 @@ import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.namenode.Namesystem;
 import org.apache.hadoop.hdfs.server.namenode.ha.HAContext;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
+import org.apache.hadoop.hdfs.server.namenode.sps.StoragePolicySatisfyManager;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.BlockReportContext;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations;
@@ -425,6 +428,12 @@ public class BlockManager implements BlockStatsMXBean {
 
   private final BlockIdManager blockIdManager;
 
+  /**
+   * For satisfying block storage policies. Instantiates if sps is enabled
+   * internally or externally.
+   */
+  private StoragePolicySatisfyManager spsManager;
+
   /** Minimum live replicas needed for the datanode to be transitioned
    * from ENTERING_MAINTENANCE to IN_MAINTENANCE.
    */
@@ -463,6 +472,8 @@ public class BlockManager implements BlockStatsMXBean {
         DFSConfigKeys.DFS_NAMENODE_RECONSTRUCTION_PENDING_TIMEOUT_SEC_KEY,
         DFSConfigKeys.DFS_NAMENODE_RECONSTRUCTION_PENDING_TIMEOUT_SEC_DEFAULT)
         * 1000L);
+
+    createSPSManager(conf);
 
     blockTokenSecretManager = createBlockTokenSecretManager(conf);
 
@@ -691,6 +702,9 @@ public class BlockManager implements BlockStatsMXBean {
   }
 
   public void close() {
+    if (getSPSManager() != null) {
+      getSPSManager().stop();
+    }
     bmSafeMode.close();
     try {
       redundancyThread.interrupt();
@@ -971,6 +985,10 @@ public class BlockManager implements BlockStatsMXBean {
       return false; // no blocks in file yet
     if(lastBlock.isComplete())
       return false; // already completed (e.g. by syncBlock)
+    if(lastBlock.isUnderRecovery()) {
+      throw new IOException("Commit or complete block " + commitBlock +
+          ", whereas it is under recovery.");
+    }
     
     final boolean committed = commitBlock(lastBlock, commitBlock);
     if (committed && lastBlock.isStriped()) {
@@ -3068,10 +3086,20 @@ public class BlockManager implements BlockStatsMXBean {
       }
     case RBW:
     case RWR:
+      final long reportedGS = reported.getGenerationStamp();
       if (!storedBlock.isComplete()) {
+        //When DN report lesser GS than the storedBlock then mark it is corrupt,
+        //As already valid replica will be present.
+        if (storedBlock.getGenerationStamp() > reported.getGenerationStamp()) {
+          return new BlockToMarkCorrupt(new Block(reported), storedBlock,
+              reportedGS,
+              "reported " + reportedState + " replica with genstamp "
+                  + reportedGS
+                  + " does not match Stored block's genstamp in block map "
+                  + storedBlock.getGenerationStamp(), Reason.GENSTAMP_MISMATCH);
+        }
         return null; // not corrupt
       } else if (storedBlock.getGenerationStamp() != reported.getGenerationStamp()) {
-        final long reportedGS = reported.getGenerationStamp();
         return new BlockToMarkCorrupt(new Block(reported), storedBlock, reportedGS,
             "reported " + reportedState + " replica with genstamp " + reportedGS
             + " does not match COMPLETE block's genstamp in block map "
@@ -3131,8 +3159,11 @@ public class BlockManager implements BlockStatsMXBean {
     block.getUnderConstructionFeature().addReplicaIfNotPresent(
         storageInfo, ucBlock.reportedBlock, ucBlock.reportedState);
 
-    if (ucBlock.reportedState == ReplicaState.FINALIZED &&
-        (block.findStorageInfo(storageInfo) < 0)) {
+    // Add replica if appropriate. If the replica was previously corrupt
+    // but now okay, it might need to be updated.
+    if (ucBlock.reportedState == ReplicaState.FINALIZED && (
+        block.findStorageInfo(storageInfo) < 0) || corruptReplicas
+        .isReplicaCorrupt(block, storageInfo.getDatanodeDescriptor())) {
       addStoredBlock(block, ucBlock.reportedBlock, storageInfo, null, true);
     }
   } 
@@ -4153,6 +4184,10 @@ public class BlockManager implements BlockStatsMXBean {
     int numExtraRedundancy = 0;
     while(it.hasNext()) {
       final BlockInfo block = it.next();
+      if (block.isDeleted()) {
+        //Orphan block, will be handled eventually, skip
+        continue;
+      }
       int expectedReplication = this.getExpectedRedundancyNum(block);
       NumberReplicas num = countNodes(block);
       if (shouldProcessExtraRedundancy(num, expectedReplication)) {
@@ -4426,6 +4461,14 @@ public class BlockManager implements BlockStatsMXBean {
   public long getMissingReplOneBlocksCount() {
     // not locking
     return this.neededReconstruction.getCorruptReplicationOneBlockSize();
+  }
+
+  public long getHighestPriorityReplicatedBlockCount(){
+    return this.neededReconstruction.getHighestPriorityReplicatedBlockCount();
+  }
+
+  public long getHighestPriorityECBlockCount(){
+    return this.neededReconstruction.getHighestPriorityECBlockCount();
   }
 
   public BlockInfo addBlockCollection(BlockInfo block,
@@ -4971,5 +5014,63 @@ public class BlockManager implements BlockStatsMXBean {
   @VisibleForTesting
   public ProvidedStorageMap getProvidedStorageMap() {
     return providedStorageMap;
+  }
+
+  /**
+   * Create SPS manager instance. It manages the user invoked sps paths and does
+   * the movement.
+   *
+   * @param conf
+   *          configuration
+   * @return true if the instance is successfully created, false otherwise.
+   */
+  private boolean createSPSManager(final Configuration conf) {
+    return createSPSManager(conf, null);
+  }
+
+  /**
+   * Create SPS manager instance. It manages the user invoked sps paths and does
+   * the movement.
+   *
+   * @param conf
+   *          configuration
+   * @param spsMode
+   *          satisfier mode
+   * @return true if the instance is successfully created, false otherwise.
+   */
+  public boolean createSPSManager(final Configuration conf,
+      final String spsMode) {
+    // sps manager manages the user invoked sps paths and does the movement.
+    // StoragePolicySatisfier(SPS) configs
+    boolean storagePolicyEnabled = conf.getBoolean(
+        DFSConfigKeys.DFS_STORAGE_POLICY_ENABLED_KEY,
+        DFSConfigKeys.DFS_STORAGE_POLICY_ENABLED_DEFAULT);
+    String modeVal = spsMode;
+    if (org.apache.commons.lang3.StringUtils.isBlank(modeVal)) {
+      modeVal = conf.get(DFSConfigKeys.DFS_STORAGE_POLICY_SATISFIER_MODE_KEY,
+          DFSConfigKeys.DFS_STORAGE_POLICY_SATISFIER_MODE_DEFAULT);
+    }
+    StoragePolicySatisfierMode mode = StoragePolicySatisfierMode
+        .fromString(modeVal);
+    if (!storagePolicyEnabled || mode == StoragePolicySatisfierMode.NONE) {
+      LOG.info("Storage policy satisfier is disabled");
+      return false;
+    }
+    spsManager = new StoragePolicySatisfyManager(conf, namesystem);
+    return true;
+  }
+
+  /**
+   * Nullify SPS manager as this feature is disabled fully.
+   */
+  public void disableSPS() {
+    spsManager = null;
+  }
+
+  /**
+   * @return sps manager.
+   */
+  public StoragePolicySatisfyManager getSPSManager() {
+    return spsManager;
   }
 }

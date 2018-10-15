@@ -38,7 +38,8 @@ public interface StorageContainerLocationProtocol {
    * set of datanodes that should be used creating this container.
    *
    */
-  ContainerWithPipeline allocateContainer(HddsProtos.ReplicationType replicationType,
+  ContainerWithPipeline allocateContainer(
+      HddsProtos.ReplicationType replicationType,
       HddsProtos.ReplicationFactor factor, String owner)
       throws IOException;
 
@@ -61,7 +62,8 @@ public interface StorageContainerLocationProtocol {
    * @return ContainerWithPipeline - the container info with the pipeline.
    * @throws IOException
    */
-  ContainerWithPipeline getContainerWithPipeline(long containerID) throws IOException;
+  ContainerWithPipeline getContainerWithPipeline(long containerID)
+      throws IOException;
 
   /**
    * Ask SCM a list of containers with a range of container names
@@ -131,4 +133,20 @@ public interface StorageContainerLocationProtocol {
    * @throws IOException
    */
   ScmInfo getScmInfo() throws IOException;
+
+  /**
+   * Check if SCM is in chill mode.
+   *
+   * @return Returns true if SCM is in chill mode else returns false.
+   * @throws IOException
+   */
+  boolean inChillMode() throws IOException;
+
+  /**
+   * Force SCM out of Chill mode.
+   *
+   * @return returns true if operation is successful.
+   * @throws IOException
+   */
+  boolean forceExitChillMode() throws IOException;
 }

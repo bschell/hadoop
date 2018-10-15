@@ -28,6 +28,7 @@ import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.hdfs.XAttrHelper;
 import org.apache.hadoop.hdfs.protocol.ErasureCodingPolicy;
 import org.apache.hadoop.hdfs.protocol.ErasureCodingPolicyInfo;
+import org.apache.hadoop.hdfs.protocol.NoECPolicySetException;
 import org.apache.hadoop.hdfs.server.namenode.FSDirectory.DirOp;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.WritableUtils;
@@ -206,6 +207,9 @@ final class FSDirErasureCodingOp {
     }
     if (xAttrs != null) {
       fsn.getEditLog().logRemoveXAttrs(src, xAttrs, logRetryCache);
+    } else {
+      throw new NoECPolicySetException(
+          "No erasure coding policy explicitly set on " + src);
     }
     return fsd.getAuditFileInfo(iip);
   }
@@ -253,11 +257,16 @@ final class FSDirErasureCodingOp {
    *                      rebuilding
    * @throws IOException
    */
-  static void enableErasureCodingPolicy(final FSNamesystem fsn,
+  static boolean enableErasureCodingPolicy(final FSNamesystem fsn,
       String ecPolicyName, final boolean logRetryCache) throws IOException {
     Preconditions.checkNotNull(ecPolicyName);
-    fsn.getErasureCodingPolicyManager().enablePolicy(ecPolicyName);
-    fsn.getEditLog().logEnableErasureCodingPolicy(ecPolicyName, logRetryCache);
+    boolean success =
+        fsn.getErasureCodingPolicyManager().enablePolicy(ecPolicyName);
+    if (success) {
+      fsn.getEditLog().logEnableErasureCodingPolicy(ecPolicyName,
+          logRetryCache);
+    }
+    return success;
   }
 
   /**
@@ -269,11 +278,16 @@ final class FSDirErasureCodingOp {
    *                      rebuilding
    * @throws IOException
    */
-  static void disableErasureCodingPolicy(final FSNamesystem fsn,
+  static boolean disableErasureCodingPolicy(final FSNamesystem fsn,
       String ecPolicyName, final boolean logRetryCache) throws IOException {
     Preconditions.checkNotNull(ecPolicyName);
-    fsn.getErasureCodingPolicyManager().disablePolicy(ecPolicyName);
-    fsn.getEditLog().logDisableErasureCodingPolicy(ecPolicyName, logRetryCache);
+    boolean success =
+        fsn.getErasureCodingPolicyManager().disablePolicy(ecPolicyName);
+    if (success) {
+      fsn.getEditLog().logDisableErasureCodingPolicy(ecPolicyName,
+          logRetryCache);
+    }
+    return success;
   }
 
   private static List<XAttr> removeErasureCodingPolicyXAttr(

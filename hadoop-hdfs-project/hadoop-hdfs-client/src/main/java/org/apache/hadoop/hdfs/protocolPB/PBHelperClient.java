@@ -908,18 +908,22 @@ public class PBHelperClient {
         case EVENT_CREATE:
           InotifyProtos.CreateEventProto create =
               InotifyProtos.CreateEventProto.parseFrom(p.getContents());
-          events.add(new Event.CreateEvent.Builder()
-              .iNodeType(createTypeConvert(create.getType()))
-              .path(create.getPath())
-              .ctime(create.getCtime())
-              .ownerName(create.getOwnerName())
-              .groupName(create.getGroupName())
-              .perms(convert(create.getPerms()))
-              .replication(create.getReplication())
-              .symlinkTarget(create.getSymlinkTarget().isEmpty() ? null :
-                  create.getSymlinkTarget())
-              .defaultBlockSize(create.getDefaultBlockSize())
-              .overwrite(create.getOverwrite()).build());
+          Event.CreateEvent.Builder builder = new Event.CreateEvent.Builder()
+                  .iNodeType(createTypeConvert(create.getType()))
+                  .path(create.getPath())
+                  .ctime(create.getCtime())
+                  .ownerName(create.getOwnerName())
+                  .groupName(create.getGroupName())
+                  .perms(convert(create.getPerms()))
+                  .replication(create.getReplication())
+                  .symlinkTarget(create.getSymlinkTarget().isEmpty() ? null :
+                          create.getSymlinkTarget())
+                  .defaultBlockSize(create.getDefaultBlockSize())
+                  .overwrite(create.getOverwrite());
+          if (create.hasErasureCoded()) {
+            builder.erasureCoded(create.getErasureCoded());
+          }
+          events.add(builder.build());
           break;
         case EVENT_METADATA:
           InotifyProtos.MetadataUpdateEventProto meta =
@@ -1990,6 +1994,13 @@ public class PBHelperClient {
 
   public static ReplicatedBlockStats convert(
       GetFsReplicatedBlockStatsResponseProto res) {
+    if (res.hasHighestPrioLowRedundancyBlocks()) {
+      return new ReplicatedBlockStats(res.getLowRedundancy(),
+          res.getCorruptBlocks(), res.getMissingBlocks(),
+          res.getMissingReplOneBlocks(), res.getBlocksInFuture(),
+          res.getPendingDeletionBlocks(),
+          res.getHighestPrioLowRedundancyBlocks());
+    }
     return new ReplicatedBlockStats(res.getLowRedundancy(),
         res.getCorruptBlocks(), res.getMissingBlocks(),
         res.getMissingReplOneBlocks(), res.getBlocksInFuture(),
@@ -1998,6 +2009,12 @@ public class PBHelperClient {
 
   public static ECBlockGroupStats convert(
       GetFsECBlockGroupStatsResponseProto res) {
+    if (res.hasHighestPrioLowRedundancyBlocks()) {
+      return new ECBlockGroupStats(res.getLowRedundancy(),
+          res.getCorruptBlocks(), res.getMissingBlocks(),
+          res.getBlocksInFuture(), res.getPendingDeletionBlocks(),
+          res.getHighestPrioLowRedundancyBlocks());
+    }
     return new ECBlockGroupStats(res.getLowRedundancy(),
         res.getCorruptBlocks(), res.getMissingBlocks(),
         res.getBlocksInFuture(), res.getPendingDeletionBlocks());
@@ -2432,6 +2449,10 @@ public class PBHelperClient {
         replicatedBlockStats.getBytesInFutureBlocks());
     result.setPendingDeletionBlocks(
         replicatedBlockStats.getPendingDeletionBlocks());
+    if (replicatedBlockStats.hasHighestPriorityLowRedundancyBlocks()) {
+      result.setHighestPrioLowRedundancyBlocks(
+          replicatedBlockStats.getHighestPriorityLowRedundancyBlocks());
+    }
     return result.build();
   }
 
@@ -2447,6 +2468,10 @@ public class PBHelperClient {
         ecBlockGroupStats.getBytesInFutureBlockGroups());
     result.setPendingDeletionBlocks(
         ecBlockGroupStats.getPendingDeletionBlocks());
+    if (ecBlockGroupStats.hasHighestPriorityLowRedundancyBlocks()) {
+      result.setHighestPrioLowRedundancyBlocks(
+          ecBlockGroupStats.getHighestPriorityLowRedundancyBlocks());
+    }
     return result.build();
   }
 
@@ -2888,22 +2913,26 @@ public class PBHelperClient {
           break;
         case CREATE:
           Event.CreateEvent ce2 = (Event.CreateEvent) e;
+          InotifyProtos.CreateEventProto.Builder pB =
+                  (InotifyProtos.CreateEventProto.newBuilder());
+          pB.setType(createTypeConvert(ce2.getiNodeType()))
+             .setPath(ce2.getPath())
+             .setCtime(ce2.getCtime())
+             .setOwnerName(ce2.getOwnerName())
+             .setGroupName(ce2.getGroupName())
+             .setPerms(convert(ce2.getPerms()))
+             .setReplication(ce2.getReplication())
+             .setSymlinkTarget(ce2.getSymlinkTarget() == null ?
+                        "" : ce2.getSymlinkTarget())
+             .setDefaultBlockSize(ce2.getDefaultBlockSize())
+             .setOverwrite(ce2.getOverwrite());
+          if (ce2.isErasureCoded().isPresent()) {
+            pB.setErasureCoded(ce2.isErasureCoded().get());
+          }
           events.add(InotifyProtos.EventProto.newBuilder()
               .setType(InotifyProtos.EventType.EVENT_CREATE)
-              .setContents(
-                  InotifyProtos.CreateEventProto.newBuilder()
-                      .setType(createTypeConvert(ce2.getiNodeType()))
-                      .setPath(ce2.getPath())
-                      .setCtime(ce2.getCtime())
-                      .setOwnerName(ce2.getOwnerName())
-                      .setGroupName(ce2.getGroupName())
-                      .setPerms(convert(ce2.getPerms()))
-                      .setReplication(ce2.getReplication())
-                      .setSymlinkTarget(ce2.getSymlinkTarget() == null ?
-                          "" : ce2.getSymlinkTarget())
-                      .setDefaultBlockSize(ce2.getDefaultBlockSize())
-                      .setOverwrite(ce2.getOverwrite()).build().toByteString()
-              ).build());
+              .setContents(pB.build().toByteString())
+              .build());
           break;
         case METADATA:
           Event.MetadataUpdateEvent me = (Event.MetadataUpdateEvent) e;

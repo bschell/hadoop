@@ -20,6 +20,7 @@ package org.apache.hadoop.hdfs.server.namenode;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.crypto.key.KeyProviderCryptoExtension.EncryptedKeyVersion;
@@ -701,7 +702,7 @@ public class ReencryptionHandler implements Runnable {
      * @throws InterruptedException
      */
     @Override
-    protected void submitCurrentBatch(final long zoneId) throws IOException,
+    protected void submitCurrentBatch(final Long zoneId) throws IOException,
         InterruptedException {
       if (currentBatch.isEmpty()) {
         return;
@@ -713,10 +714,10 @@ public class ReencryptionHandler implements Runnable {
           zst = new ZoneSubmissionTracker();
           submissions.put(zoneId, zst);
         }
+        Future future = batchService.submit(new EDEKReencryptCallable(zoneId,
+            currentBatch, reencryptionHandler));
+        zst.addTask(future);
       }
-      Future future = batchService.submit(new EDEKReencryptCallable(zoneId,
-          currentBatch, reencryptionHandler));
-      zst.addTask(future);
       LOG.info("Submitted batch (start:{}, size:{}) of zone {} to re-encrypt.",
           currentBatch.getFirstFilePath(), currentBatch.size(), zoneId);
       currentBatch = new ReencryptionBatch(reencryptBatchSize);

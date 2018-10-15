@@ -167,7 +167,7 @@ public class YarnConfiguration extends Configuration {
   public static final String DEFAULT_IPC_SERVER_FACTORY_CLASS = 
       "org.apache.hadoop.yarn.factories.impl.pb.RpcServerFactoryPBImpl";
 
-  /** Factory to create serializeable records.*/
+  /** Factory to create serializable records.*/
   public static final String IPC_RECORD_FACTORY_CLASS = 
     IPC_PREFIX + "record.factory.class";
   public static final String DEFAULT_IPC_RECORD_FACTORY_CLASS = 
@@ -541,7 +541,14 @@ public class YarnConfiguration extends Configuration {
   public static final String RM_RESOURCE_TRACKER_CLIENT_THREAD_COUNT =
     RM_PREFIX + "resource-tracker.client.thread-count";
   public static final int DEFAULT_RM_RESOURCE_TRACKER_CLIENT_THREAD_COUNT = 50;
-  
+
+  /** Check IP and hostname resolution during nodemanager registration.*/
+  public static final String RM_NM_REGISTRATION_IP_HOSTNAME_CHECK_KEY =
+      RM_PREFIX + "resource-tracker.nm.ip-hostname-check";
+
+  public static final boolean DEFAULT_RM_NM_REGISTRATION_IP_HOSTNAME_CHECK_KEY =
+      false;
+
   /** The class to use as the resource scheduler.*/
   public static final String RM_SCHEDULER = 
     RM_PREFIX + "scheduler.class";
@@ -1151,7 +1158,7 @@ public class YarnConfiguration extends Configuration {
   public static final String DEFAULT_NM_ADDRESS = "0.0.0.0:"
       + DEFAULT_NM_PORT;
   
-  /** The actual bind address or the NM.*/
+  /** The actual bind address for the NM.*/
   public static final String NM_BIND_HOST =
     NM_PREFIX + "bind-host";
 
@@ -1216,7 +1223,7 @@ public class YarnConfiguration extends Configuration {
       NM_PREFIX + "collector-service.address";
   public static final int DEFAULT_NM_COLLECTOR_SERVICE_PORT = 8048;
   public static final String DEFAULT_NM_COLLECTOR_SERVICE_ADDRESS =
-      "0.0.0.0:" + DEFAULT_NM_LOCALIZER_PORT;
+      "0.0.0.0:" + DEFAULT_NM_COLLECTOR_SERVICE_PORT;
 
   /** Interval in between cache cleanups.*/
   public static final String NM_LOCALIZER_CACHE_CLEANUP_INTERVAL_MS =
@@ -1865,7 +1872,7 @@ public class YarnConfiguration extends Configuration {
 
   /**
    * Comma separated list of runtimes that are allowed when using
-   * LinuxContainerExecutor. The allowed values are:
+   * LinuxContainerExecutor. The standard values are:
    * <ul>
    *   <li>default</li>
    *   <li>docker</li>
@@ -1875,12 +1882,23 @@ public class YarnConfiguration extends Configuration {
   public static final String LINUX_CONTAINER_RUNTIME_ALLOWED_RUNTIMES =
       LINUX_CONTAINER_RUNTIME_PREFIX + "allowed-runtimes";
 
+  public static final String LINUX_CONTAINER_RUNTIME_CLASS_FMT =
+      LINUX_CONTAINER_RUNTIME_PREFIX + "%s.class";
+
   /** The default list of allowed runtimes when using LinuxContainerExecutor. */
   public static final String[] DEFAULT_LINUX_CONTAINER_RUNTIME_ALLOWED_RUNTIMES
       = {"default"};
 
+  /** Default runtime to be used. */
+  public static final String LINUX_CONTAINER_RUNTIME_TYPE =
+      LINUX_CONTAINER_RUNTIME_PREFIX + "type";
+
   public static final String DOCKER_CONTAINER_RUNTIME_PREFIX =
       LINUX_CONTAINER_RUNTIME_PREFIX + "docker.";
+
+  /** Default docker image to be used. */
+  public static final String NM_DOCKER_IMAGE_NAME =
+      DOCKER_CONTAINER_RUNTIME_PREFIX + "image-name";
 
   /** Capabilities allowed (and added by default) for docker containers. **/
   public static final String NM_DOCKER_CONTAINER_CAPABILITIES =
@@ -1992,7 +2010,10 @@ public class YarnConfiguration extends Configuration {
    * A configurable value to pass to the Docker Stop command. This value
    * defines the number of seconds between the docker stop command sending
    * a SIGTERM and a SIGKILL.
+   *
+   * @deprecated use {@link YarnConfiguration#NM_SLEEP_DELAY_BEFORE_SIGKILL_MS}
    */
+  @Deprecated
   public static final String NM_DOCKER_STOP_GRACE_PERIOD =
       DOCKER_CONTAINER_RUNTIME_PREFIX + "stop.grace-period";
 
@@ -2000,6 +2021,7 @@ public class YarnConfiguration extends Configuration {
    * The default value for the grace period between the SIGTERM and the
    * SIGKILL in the Docker Stop command.
    */
+  @Deprecated
   public static final int DEFAULT_NM_DOCKER_STOP_GRACE_PERIOD = 10;
 
   /** The default list of read-only mounts to be bind-mounted into all
@@ -2011,6 +2033,11 @@ public class YarnConfiguration extends Configuration {
    *  Docker containers that use DockerContainerRuntime. */
   public static final String NM_DOCKER_DEFAULT_RW_MOUNTS =
       DOCKER_CONTAINER_RUNTIME_PREFIX + "default-rw-mounts";
+
+  /** The default list of tmpfs mounts to be mounted into all
+   *  Docker containers that use DockerContainerRuntime. */
+  public static final String NM_DOCKER_DEFAULT_TMPFS_MOUNTS =
+      DOCKER_CONTAINER_RUNTIME_PREFIX + "default-tmpfs-mounts";
 
   /** The mode in which the Java Container Sandbox should run detailed by
    *  the JavaSandboxLinuxContainerRuntime. */
@@ -3209,8 +3236,19 @@ public class YarnConfiguration extends Configuration {
       "org.apache.hadoop.yarn.server.federation.resolver."
           + "DefaultSubClusterResolverImpl";
 
-  public static final String DEFAULT_FEDERATION_POLICY_KEY = "*";
+  // the maximum wait time for the first async heartbeat response
+  public static final String FEDERATION_AMRMPROXY_HB_MAX_WAIT_MS =
+      FEDERATION_PREFIX + "amrmproxy.hb.maximum.wait.ms";
+  public static final long DEFAULT_FEDERATION_AMRMPROXY_HB_MAX_WAIT_MS = 5000;
 
+  // AMRMProxy split-merge timeout for active sub-clusters. We will not route
+  // new asks to expired sub-clusters.
+  public static final String FEDERATION_AMRMPROXY_SUBCLUSTER_TIMEOUT =
+      FEDERATION_PREFIX + "amrmproxy.subcluster.timeout.ms";
+  public static final long DEFAULT_FEDERATION_AMRMPROXY_SUBCLUSTER_TIMEOUT =
+      60000; // one minute
+
+  public static final String DEFAULT_FEDERATION_POLICY_KEY = "*";
   public static final String FEDERATION_POLICY_MANAGER = FEDERATION_PREFIX
       + "policy-manager";
 
@@ -3300,6 +3338,11 @@ public class YarnConfiguration extends Configuration {
   public static final int DEFAULT_ROUTER_CLIENTRM_SUBMIT_RETRY = 3;
 
   public static final String ROUTER_WEBAPP_PREFIX = ROUTER_PREFIX + "webapp.";
+
+  public static final String ROUTER_USER_CLIENT_THREADS_SIZE =
+      ROUTER_PREFIX + "interceptor.user.threadpool-size";
+
+  public static final int DEFAULT_ROUTER_USER_CLIENT_THREADS_SIZE = 5;
 
   /** The address of the Router web application. */
   public static final String ROUTER_WEBAPP_ADDRESS =
@@ -3458,6 +3501,22 @@ public class YarnConfiguration extends Configuration {
       + "fs-store.root-dir";
 
   /**
+   * Node-attribute configurations.
+   */
+  public static final String NODE_ATTRIBUTE_PREFIX =
+      YARN_PREFIX + "node-attribute.";
+  /**
+   * Node attribute store implementation class.
+   */
+  public static final String FS_NODE_ATTRIBUTE_STORE_IMPL_CLASS =
+      NODE_ATTRIBUTE_PREFIX + "fs-store.impl.class";
+  /**
+   * File system node attribute store directory.
+   */
+  public static final String FS_NODE_ATTRIBUTE_STORE_ROOT_DIR =
+      NODE_ATTRIBUTE_PREFIX + "fs-store.root-dir";
+
+  /**
    * Flag to indicate if the node labels feature enabled, by default it's
    * disabled
    */
@@ -3519,15 +3578,24 @@ public class YarnConfiguration extends Configuration {
   private static final String NM_NODE_LABELS_PREFIX = NM_PREFIX
       + "node-labels.";
 
+  private static final String NM_NODE_ATTRIBUTES_PREFIX = NM_PREFIX
+      + "node-attributes.";
+
   public static final String NM_NODE_LABELS_PROVIDER_CONFIG =
       NM_NODE_LABELS_PREFIX + "provider";
 
+  public static final String NM_NODE_ATTRIBUTES_PROVIDER_CONFIG =
+      NM_NODE_ATTRIBUTES_PREFIX + "provider";
+
   // whitelist names for the yarn.nodemanager.node-labels.provider
-  public static final String CONFIG_NODE_LABELS_PROVIDER = "config";
-  public static final String SCRIPT_NODE_LABELS_PROVIDER = "script";
+  public static final String CONFIG_NODE_DESCRIPTOR_PROVIDER = "config";
+  public static final String SCRIPT_NODE_DESCRIPTOR_PROVIDER = "script";
 
   private static final String NM_NODE_LABELS_PROVIDER_PREFIX =
       NM_NODE_LABELS_PREFIX + "provider.";
+
+  private static final String NM_NODE_ATTRIBUTES_PROVIDER_PREFIX =
+      NM_NODE_ATTRIBUTES_PREFIX + "provider.";
 
   public static final String NM_NODE_LABELS_RESYNC_INTERVAL =
       NM_NODE_LABELS_PREFIX + "resync-interval-ms";
@@ -3552,6 +3620,9 @@ public class YarnConfiguration extends Configuration {
 
   public static final String NM_PROVIDER_CONFIGURED_NODE_PARTITION =
       NM_NODE_LABELS_PROVIDER_PREFIX + "configured-node-partition";
+
+  public static final String NM_PROVIDER_CONFIGURED_NODE_ATTRIBUTES =
+      NM_NODE_ATTRIBUTES_PROVIDER_PREFIX + "configured-node-attributes";
 
   private static final String RM_NODE_LABELS_PREFIX = RM_PREFIX
       + "node-labels.";
@@ -3600,6 +3671,33 @@ public class YarnConfiguration extends Configuration {
       NM_SCRIPT_BASED_NODE_LABELS_PROVIDER_PREFIX + "opts";
 
   /**
+   * Node attribute provider fetch attributes interval and timeout.
+   */
+  public static final String NM_NODE_ATTRIBUTES_PROVIDER_FETCH_INTERVAL_MS =
+      NM_NODE_ATTRIBUTES_PROVIDER_PREFIX + "fetch-interval-ms";
+
+  public static final long
+      DEFAULT_NM_NODE_ATTRIBUTES_PROVIDER_FETCH_INTERVAL_MS = 10 * 60 * 1000;
+
+  public static final String NM_NODE_ATTRIBUTES_PROVIDER_FETCH_TIMEOUT_MS =
+      NM_NODE_ATTRIBUTES_PROVIDER_PREFIX + "fetch-timeout-ms";
+
+  public static final long DEFAULT_NM_NODE_ATTRIBUTES_PROVIDER_FETCH_TIMEOUT_MS
+      = DEFAULT_NM_NODE_ATTRIBUTES_PROVIDER_FETCH_INTERVAL_MS * 2;
+
+  /**
+   * Script to collect node attributes.
+   */
+  private static final String NM_SCRIPT_BASED_NODE_ATTRIBUTES_PROVIDER_PREFIX =
+      NM_NODE_ATTRIBUTES_PROVIDER_PREFIX + "script.";
+
+  public static final String NM_SCRIPT_BASED_NODE_ATTRIBUTES_PROVIDER_PATH =
+      NM_SCRIPT_BASED_NODE_ATTRIBUTES_PROVIDER_PREFIX + "path";
+
+  public static final String NM_SCRIPT_BASED_NODE_ATTRIBUTES_PROVIDER_OPTS =
+      NM_SCRIPT_BASED_NODE_ATTRIBUTES_PROVIDER_PREFIX + "opts";
+
+  /*
    * Support to view apps for given user in secure cluster.
    * @deprecated This field is deprecated for {@link #FILTER_ENTITY_LIST_BY_USER}
    */

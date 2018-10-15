@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.ozone.container.keyvalue;
 
+import org.apache.hadoop.conf.StorageUnit;
 import org.apache.hadoop.hdds.client.BlockID;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
@@ -79,14 +80,15 @@ public class TestChunkManagerImpl {
     Mockito.when(volumeChoosingPolicy.chooseVolume(anyList(), anyLong()))
         .thenReturn(hddsVolume);
 
-    keyValueContainerData = new KeyValueContainerData(1L, 5);
+    keyValueContainerData = new KeyValueContainerData(1L,
+        (long) StorageUnit.GB.toBytes(5));
 
     keyValueContainer = new KeyValueContainer(keyValueContainerData, config);
 
     keyValueContainer.create(volumeSet, volumeChoosingPolicy, scmId);
 
     data = "testing write chunks".getBytes();
-    // Creating KeyData
+    // Creating BlockData
     blockID = new BlockID(1L, 1L);
     chunkInfo = new ChunkInfo(String.format("%d.data.%d", blockID
         .getLocalID(), 0), 0, data.length);

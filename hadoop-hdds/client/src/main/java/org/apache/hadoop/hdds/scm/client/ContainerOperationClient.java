@@ -96,8 +96,7 @@ public class ContainerOperationClient implements ScmClient {
               xceiverClientManager.getType(),
               xceiverClientManager.getFactor(), owner);
       Pipeline pipeline = containerWithPipeline.getPipeline();
-      client = xceiverClientManager.acquireClient(pipeline,
-          containerWithPipeline.getContainerInfo().getContainerID());
+      client = xceiverClientManager.acquireClient(pipeline);
 
       // Allocated State means that SCM has allocated this pipeline in its
       // namespace. The client needs to create the pipeline on the machines
@@ -158,7 +157,7 @@ public class ContainerOperationClient implements ScmClient {
   private void createPipeline(XceiverClientSpi client, Pipeline pipeline)
       throws IOException {
 
-    Preconditions.checkNotNull(pipeline.getPipelineName(), "Pipeline " +
+    Preconditions.checkNotNull(pipeline.getId(), "Pipeline " +
         "name cannot be null when client create flag is set.");
 
     // Pipeline creation is a three step process.
@@ -180,8 +179,7 @@ public class ContainerOperationClient implements ScmClient {
     //    ObjectStageChangeRequestProto.Op.create,
     //    ObjectStageChangeRequestProto.Stage.begin);
 
-    client.createPipeline(pipeline.getPipelineName(),
-        pipeline.getMachines());
+    client.createPipeline();
 
     //storageContainerLocationClient.notifyObjectStageChange(
     //    ObjectStageChangeRequestProto.Type.pipeline,
@@ -208,8 +206,7 @@ public class ContainerOperationClient implements ScmClient {
           storageContainerLocationClient.allocateContainer(type, factor,
               owner);
       Pipeline pipeline = containerWithPipeline.getPipeline();
-      client = xceiverClientManager.acquireClient(pipeline,
-          containerWithPipeline.getContainerInfo().getContainerID());
+      client = xceiverClientManager.acquireClient(pipeline);
 
       // Allocated State means that SCM has allocated this pipeline in its
       // namespace. The client needs to create the pipeline on the machines
@@ -218,8 +215,7 @@ public class ContainerOperationClient implements ScmClient {
         createPipeline(client, pipeline);
       }
       // connect to pipeline leader and allocate container on leader datanode.
-      client = xceiverClientManager.acquireClient(pipeline,
-          containerWithPipeline.getContainerInfo().getContainerID());
+      client = xceiverClientManager.acquireClient(pipeline);
       createContainer(client,
           containerWithPipeline.getContainerInfo().getContainerID());
       return containerWithPipeline;
@@ -258,6 +254,15 @@ public class ContainerOperationClient implements ScmClient {
         factor, nodePool);
   }
 
+  @Override
+  public void close() {
+    try {
+      xceiverClientManager.close();
+    } catch (Exception ex) {
+      LOG.error("Can't close " + this.getClass().getSimpleName(), ex);
+    }
+  }
+
   /**
    * Deletes an existing container.
    *
@@ -271,7 +276,7 @@ public class ContainerOperationClient implements ScmClient {
       boolean force) throws IOException {
     XceiverClientSpi client = null;
     try {
-      client = xceiverClientManager.acquireClient(pipeline, containerId);
+      client = xceiverClientManager.acquireClient(pipeline);
       String traceID = UUID.randomUUID().toString();
       ContainerProtocolCalls
           .deleteContainer(client, containerId, force, traceID);
@@ -326,7 +331,7 @@ public class ContainerOperationClient implements ScmClient {
       Pipeline pipeline) throws IOException {
     XceiverClientSpi client = null;
     try {
-      client = xceiverClientManager.acquireClient(pipeline, containerID);
+      client = xceiverClientManager.acquireClient(pipeline);
       String traceID = UUID.randomUUID().toString();
       ReadContainerResponseProto response =
           ContainerProtocolCalls.readContainer(client, containerID, traceID);
@@ -413,7 +418,7 @@ public class ContainerOperationClient implements ScmClient {
       For now, take the #2 way.
        */
       // Actually close the container on Datanode
-      client = xceiverClientManager.acquireClient(pipeline, containerId);
+      client = xceiverClientManager.acquireClient(pipeline);
       String traceID = UUID.randomUUID().toString();
 
       storageContainerLocationClient.notifyObjectStageChange(

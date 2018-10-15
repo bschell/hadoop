@@ -35,6 +35,8 @@ import org.apache.hadoop.yarn.service.api.records.ComponentState;
 import org.apache.hadoop.yarn.service.api.records.Container;
 import org.apache.hadoop.yarn.service.api.records.ContainerState;
 import org.apache.hadoop.yarn.service.api.records.Service;
+import org.apache.hadoop.yarn.service.api.records.ServiceState;
+import org.apache.hadoop.yarn.service.client.ServiceClient;
 import org.apache.hadoop.yarn.service.api.records.Artifact;
 import org.apache.hadoop.yarn.service.api.records.Component;
 import org.apache.hadoop.yarn.service.api.records.Configuration;
@@ -603,13 +605,23 @@ public class ServiceApiUtil {
   public static void validateInstancesUpgrade(List<Container>
       liveContainers) throws YarnException {
     for (Container liveContainer : liveContainers) {
-      if (!liveContainer.getState().equals(ContainerState.NEEDS_UPGRADE)) {
+      if (!isUpgradable(liveContainer)) {
         // Nothing to upgrade
         throw new YarnException(String.format(
             ERROR_COMP_INSTANCE_DOES_NOT_NEED_UPGRADE,
             liveContainer.getComponentInstanceName()));
       }
     }
+  }
+
+  /**
+   * Returns whether the container can be upgraded in the current state.
+   */
+  public static boolean isUpgradable(Container container) {
+
+    return container.getState() != null &&
+        (container.getState().equals(ContainerState.NEEDS_UPGRADE) ||
+            container.getState().equals(ContainerState.FAILED_UPGRADE));
   }
 
   /**
@@ -629,7 +641,33 @@ public class ServiceApiUtil {
               ERROR_COMP_DOES_NOT_NEED_UPGRADE, liveComp.getName()));
         }
         liveComp.getContainers().forEach(liveContainer -> {
-          if (liveContainer.getState().equals(ContainerState.NEEDS_UPGRADE)) {
+          if (isUpgradable(liveContainer)) {
+            containerNeedUpgrade.add(liveContainer);
+          }
+        });
+      }
+    }
+    return containerNeedUpgrade;
+  }
+
+  /**
+   * Validates the components that are requested are stable for upgrade.
+   * It returns the instances of the components which are in ready state.
+   */
+  public static List<Container> validateAndResolveCompsStable(
+      Service liveService, Collection<String> compNames) throws YarnException {
+    Preconditions.checkNotNull(compNames);
+    HashSet<String> requestedComps = Sets.newHashSet(compNames);
+    List<Container> containerNeedUpgrade = new ArrayList<>();
+    for (Component liveComp : liveService.getComponents()) {
+      if (requestedComps.contains(liveComp.getName())) {
+        if (!liveComp.getState().equals(ComponentState.STABLE)) {
+          // Nothing to upgrade
+          throw new YarnException(String.format(
+              ERROR_COMP_DOES_NOT_NEED_UPGRADE, liveComp.getName()));
+        }
+        liveComp.getContainers().forEach(liveContainer -> {
+          if (liveContainer.getState().equals(ContainerState.READY)) {
             containerNeedUpgrade.add(liveContainer);
           }
         });
@@ -650,5 +688,64 @@ public class ServiceApiUtil {
 
   public static String $(String s) {
     return "${" + s +"}";
+  }
+
+  public static List<String> resolveCompsDependency(Service service) {
+    List<String> components = new ArrayList<String>();
+    for (Component component : service.getComponents()) {
+      int depSize = component.getDependencies().size();
+      if (!components.contains(component.getName())) {
+        components.add(component.getName());
+      }
+      if (depSize != 0) {
+        for (String depComp : component.getDependencies()) {
+          if (!components.contains(depComp)) {
+            components.add(0, depComp);
+          }
+        }
+      }
+    }
+    return components;
+  }
+
+  private static boolean serviceDependencySatisfied(Service service) {
+    boolean result = true;
+    try {
+      List<String> dependencies = service
+          .getDependencies();
+      org.apache.hadoop.conf.Configuration conf =
+          new org.apache.hadoop.conf.Configuration();
+      if (dependencies != null && dependencies.size() > 0) {
+        ServiceClient sc = new ServiceClient();
+        sc.init(conf);
+        sc.start();
+        for (String dependent : dependencies) {
+          Service dependentService = sc.getStatus(dependent);
+          if (dependentService.getState() == null ||
+              !dependentService.getState().equals(ServiceState.STABLE)) {
+            result = false;
+            LOG.info("Service dependency is not satisfied for " +
+                "service: {} state: {}", dependent,
+                dependentService.getState());
+          }
+        }
+        sc.close();
+      }
+    } catch (IOException | YarnException e) {
+      LOG.warn("Caught exception: ", e);
+      LOG.info("Service dependency is not satisified.");
+      result = false;
+    }
+    return result;
+  }
+
+  public static void checkServiceDependencySatisified(Service service) {
+    while (!serviceDependencySatisfied(service)) {
+      try {
+        LOG.info("Waiting for service dependencies.");
+        Thread.sleep(15000L);
+      } catch (InterruptedException e) {
+      }
+    }
   }
 }

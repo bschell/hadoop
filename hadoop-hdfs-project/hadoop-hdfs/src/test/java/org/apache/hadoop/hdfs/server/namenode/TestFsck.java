@@ -60,9 +60,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.google.common.base.Supplier;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.commons.logging.impl.Log4JLogger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -136,8 +135,8 @@ import com.google.common.collect.Sets;
  * A JUnit test for doing fsck.
  */
 public class TestFsck {
-  private static final Log LOG =
-      LogFactory.getLog(TestFsck.class.getName());
+  private static final org.slf4j.Logger LOG =
+      LoggerFactory.getLogger(TestFsck.class.getName());
 
   static final String AUDITLOG_FILE =
       GenericTestUtils.getTempPath("TestFsck-audit.log");
@@ -171,13 +170,15 @@ public class TestFsck {
                         throws Exception {
     ByteArrayOutputStream bStream = new ByteArrayOutputStream();
     PrintStream out = new PrintStream(bStream, true);
-    GenericTestUtils.setLogLevel(FSPermissionChecker.LOG, Level.ALL);
+    GenericTestUtils.setLogLevel(
+        FSPermissionChecker.LOG, org.slf4j.event.Level.TRACE);
     int errCode = ToolRunner.run(new DFSck(conf, out), path);
     LOG.info("OUTPUT = " + bStream.toString());
     if (checkErrorCode) {
       assertEquals(expectedErrCode, errCode);
     }
-    GenericTestUtils.setLogLevel(FSPermissionChecker.LOG, Level.INFO);
+    GenericTestUtils.setLogLevel(
+        FSPermissionChecker.LOG, org.slf4j.event.Level.INFO);
     return bStream.toString();
   }
 
@@ -2487,5 +2488,23 @@ public class TestFsck {
       DFSTestUtil.appendFile(fs, fileName, "appendCorruptBlock");
       runFsck(cluster.getConfiguration(0), 0, true, "/");
     }
+  }
+
+  @Test
+  public void testFsckNonPrivilegedListCorrupt() throws Exception {
+    cluster = new MiniDFSCluster.Builder(conf).numDataNodes(4).build();
+    UserGroupInformation ugi = UserGroupInformation.createUserForTesting("systest", new String[]{""});
+    ugi.doAs(new PrivilegedExceptionAction<Void>() {
+       @Override
+        public Void run() throws Exception {
+         String path = "/";
+         String outStr = runFsck(conf, -1, true, path, "-list-corruptfileblocks");
+
+         assertFalse(outStr.contains("The list of corrupt files under path '" + path + "' are:"));
+         assertFalse(outStr.contains("The filesystem under path '" + path + "' has "));
+         assertTrue(outStr.contains("Failed to open path '" + path + "': Permission denied"));
+         return null;
+       }
+      });
   }
 }

@@ -18,7 +18,6 @@
 package org.apache.hadoop.ozone.audit;
 
 import org.apache.commons.io.FileUtils;
-import org.apache.logging.log4j.Level;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -28,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.assertTrue;
 
@@ -36,10 +36,53 @@ import static org.junit.Assert.assertTrue;
  */
 public class TestOzoneAuditLogger {
 
-  private static final Logger LOG = LoggerFactory.getLogger
-      (TestOzoneAuditLogger.class.getName());
-  private static AuditLogger AUDIT = new AuditLogger(AuditLoggerType.OMLOGGER);
-  public DummyEntity auditableObj = new DummyEntity();
+  private static final Logger LOG =
+      LoggerFactory.getLogger(TestOzoneAuditLogger.class.getName());
+
+  private static final AuditLogger AUDIT =
+      new AuditLogger(AuditLoggerType.OMLOGGER);
+
+  private static final String SUCCESS = AuditEventStatus.SUCCESS.name();
+  private static final String FAILURE = AuditEventStatus.FAILURE.name();
+
+  private static final Map<String, String> PARAMS =
+      new DummyEntity().toAuditMap();
+
+  private static final AuditMessage WRITE_FAIL_MSG =
+      new AuditMessage.Builder()
+          .setUser("john")
+          .atIp("192.168.0.1")
+          .forOperation(DummyAction.CREATE_VOLUME.name())
+          .withParams(PARAMS)
+          .withResult(FAILURE)
+          .withException(null).build();
+
+  private static final AuditMessage WRITE_SUCCESS_MSG =
+      new AuditMessage.Builder()
+          .setUser("john")
+          .atIp("192.168.0.1")
+          .forOperation(DummyAction.CREATE_VOLUME.name())
+          .withParams(PARAMS)
+          .withResult(SUCCESS)
+          .withException(null).build();
+
+  private static final AuditMessage READ_FAIL_MSG =
+      new AuditMessage.Builder()
+          .setUser("john")
+          .atIp("192.168.0.1")
+          .forOperation(DummyAction.READ_VOLUME.name())
+          .withParams(PARAMS)
+          .withResult(FAILURE)
+          .withException(null).build();
+
+  private static final AuditMessage READ_SUCCESS_MSG =
+      new AuditMessage.Builder()
+          .setUser("john")
+          .atIp("192.168.0.1")
+          .forOperation(DummyAction.READ_VOLUME.name())
+          .withParams(PARAMS)
+          .withResult(SUCCESS)
+          .withException(null).build();
 
   @BeforeClass
   public static void setUp(){
@@ -48,45 +91,34 @@ public class TestOzoneAuditLogger {
 
   @AfterClass
   public static void tearDown() {
-      File file = new File("audit.log");
-      if (FileUtils.deleteQuietly(file)) {
-        LOG.info(file.getName() +
-            " has been deleted as all tests have completed.");
-      } else {
-        LOG.info("audit.log could not be deleted.");
-      }
+    File file = new File("audit.log");
+    if (FileUtils.deleteQuietly(file)) {
+      LOG.info(file.getName() +
+          " has been deleted as all tests have completed.");
+    } else {
+      LOG.info("audit.log could not be deleted.");
+    }
   }
 
   /**
-   * Ensures WriteSuccess events are logged @ INFO and above.
+   * Test to verify default log level is INFO when logging success events.
    */
   @Test
-  public void logInfoWriteSuccess() throws IOException {
-    AUDIT.logWriteSuccess(DummyAction.CREATE_VOLUME, auditableObj.toAuditMap(), Level.INFO);
-    String expected = "[INFO ] OMAudit - CREATE_VOLUME [ key1=\"value1\" " +
-        "key2=\"value2\"] SUCCESS";
+  public void verifyDefaultLogLevelForSuccess() throws IOException {
+    AUDIT.logWriteSuccess(WRITE_SUCCESS_MSG);
+    String expected =
+        "INFO  | OMAudit | " + WRITE_SUCCESS_MSG.getFormattedMessage();
     verifyLog(expected);
   }
 
   /**
-   * Test to verify default log level is INFO
+   * Test to verify default log level is ERROR when logging failure events.
    */
   @Test
-  public void verifyDefaultLogLevel() throws IOException {
-    AUDIT.logWriteSuccess(DummyAction.CREATE_VOLUME, auditableObj.toAuditMap());
-    String expected = "[INFO ] OMAudit - CREATE_VOLUME [ key1=\"value1\" " +
-        "key2=\"value2\"] SUCCESS";
-    verifyLog(expected);
-  }
-
-  /**
-   * Test to verify WriteFailure events are logged as ERROR.
-   */
-  @Test
-  public void logErrorWriteFailure() throws IOException {
-    AUDIT.logWriteFailure(DummyAction.CREATE_VOLUME, auditableObj.toAuditMap(), Level.ERROR);
-    String expected = "[ERROR] OMAudit - CREATE_VOLUME [ key1=\"value1\" " +
-        "key2=\"value2\"] FAILURE";
+  public void verifyDefaultLogLevelForFailure() throws IOException {
+    AUDIT.logWriteFailure(WRITE_FAIL_MSG);
+    String expected =
+        "ERROR | OMAudit | " + WRITE_FAIL_MSG.getFormattedMessage();
     verifyLog(expected);
   }
 
@@ -95,47 +127,34 @@ public class TestOzoneAuditLogger {
    */
   @Test
   public void notLogReadEvents() throws IOException {
-    AUDIT.logReadSuccess(DummyAction.READ_VOLUME, auditableObj.toAuditMap(), Level.INFO);
-    AUDIT.logReadFailure(DummyAction.READ_VOLUME, auditableObj.toAuditMap(), Level.INFO);
-    AUDIT.logReadFailure(DummyAction.READ_VOLUME, auditableObj.toAuditMap(), Level.ERROR);
-    AUDIT.logReadFailure(DummyAction.READ_VOLUME, auditableObj.toAuditMap(), Level.ERROR,
-        new Exception("test"));
-    verifyNoLog();
-  }
-
-  /**
-   * Test to ensure DEBUG level messages are not logged when INFO is enabled.
-   */
-  @Test
-  public void notLogDebugEvents() throws IOException {
-    AUDIT.logWriteSuccess(DummyAction.CREATE_VOLUME, auditableObj.toAuditMap(), Level.DEBUG);
-    AUDIT.logReadSuccess(DummyAction.READ_VOLUME, auditableObj.toAuditMap(), Level.DEBUG);
+    AUDIT.logReadSuccess(READ_SUCCESS_MSG);
+    AUDIT.logReadFailure(READ_FAIL_MSG);
     verifyNoLog();
   }
 
   private void verifyLog(String expected) throws IOException {
     File file = new File("audit.log");
     List<String> lines = FileUtils.readLines(file, (String)null);
-      final int retry = 5;
-      int i = 0;
-      while (lines.isEmpty() && i < retry) {
-        lines = FileUtils.readLines(file, (String)null);
-        try {
-          Thread.sleep( 500 * (i + 1));
-        } catch(InterruptedException ie) {
-          Thread.currentThread().interrupt();
-          break;
-        }
-        i++;
+    final int retry = 5;
+    int i = 0;
+    while (lines.isEmpty() && i < retry) {
+      lines = FileUtils.readLines(file, (String)null);
+      try {
+        Thread.sleep(500 * (i + 1));
+      } catch(InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        break;
       }
+      i++;
+    }
 
-      // When log entry is expected, the log file will contain one line and
-      // that must be equal to the expected string
-      assertTrue(lines.size() != 0);
-      assertTrue(expected.equalsIgnoreCase(lines.get(0)));
-      //empty the file
-      lines.remove(0);
-      FileUtils.writeLines(file, lines, false);
+    // When log entry is expected, the log file will contain one line and
+    // that must be equal to the expected string
+    assertTrue(lines.size() != 0);
+    assertTrue(expected.equalsIgnoreCase(lines.get(0)));
+    //empty the file
+    lines.remove(0);
+    FileUtils.writeLines(file, lines, false);
   }
 
   private void verifyNoLog() throws IOException {

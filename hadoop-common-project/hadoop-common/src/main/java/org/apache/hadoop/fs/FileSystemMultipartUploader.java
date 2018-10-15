@@ -16,12 +16,6 @@
  */
 package org.apache.hadoop.fs;
 
-import com.google.common.base.Charsets;
-import org.apache.commons.compress.utils.IOUtils;
-import org.apache.commons.lang3.tuple.Pair;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.permission.FsPermission;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -29,14 +23,31 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import com.google.common.base.Charsets;
+import com.google.common.base.Preconditions;
+
+import org.apache.commons.compress.utils.IOUtils;
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.classification.InterfaceStability;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.permission.FsPermission;
+
+import static org.apache.hadoop.fs.Path.mergePaths;
+
 /**
  * A MultipartUploader that uses the basic FileSystem commands.
  * This is done in three stages:
- * Init - create a temp _multipart directory.
- * PutPart - copying the individual parts of the file to the temp directory.
- * Complete - use {@link FileSystem#concat} to merge the files; and then delete
- * the temp directory.
+ * <ul>
+ *   <li>Init - create a temp {@code _multipart} directory.</li>
+ *   <li>PutPart - copying the individual parts of the file to the temp
+ *   directory.</li>
+ *   <li>Complete - use {@link FileSystem#concat} to merge the files;
+ *   and then delete the temp directory.</li>
+ * </ul>
  */
+@InterfaceAudience.Private
+@InterfaceStability.Unstable
 public class FileSystemMultipartUploader extends MultipartUploader {
 
   private final FileSystem fs;
@@ -61,24 +72,40 @@ public class FileSystemMultipartUploader extends MultipartUploader {
       throws IOException {
 
     byte[] uploadIdByteArray = uploadId.toByteArray();
+    checkUploadId(uploadIdByteArray);
     Path collectorPath = new Path(new String(uploadIdByteArray, 0,
         uploadIdByteArray.length, Charsets.UTF_8));
     Path partPath =
-        Path.mergePaths(collectorPath, Path.mergePaths(new Path(Path.SEPARATOR),
+        mergePaths(collectorPath, mergePaths(new Path(Path.SEPARATOR),
             new Path(Integer.toString(partNumber) + ".part")));
-    FSDataOutputStreamBuilder outputStream = fs.createFile(partPath);
-    FSDataOutputStream fsDataOutputStream = outputStream.build();
-    IOUtils.copy(inputStream, fsDataOutputStream, 4096);
-    fsDataOutputStream.close();
+    try(FSDataOutputStream fsDataOutputStream =
+            fs.createFile(partPath).build()) {
+      IOUtils.copy(inputStream, fsDataOutputStream, 4096);
+    } finally {
+      org.apache.hadoop.io.IOUtils.cleanupWithLogger(LOG, inputStream);
+    }
     return BBPartHandle.from(ByteBuffer.wrap(
         partPath.toString().getBytes(Charsets.UTF_8)));
   }
 
   private Path createCollectorPath(Path filePath) {
-    return Path.mergePaths(filePath.getParent(),
-        Path.mergePaths(new Path(filePath.getName().split("\\.")[0]),
-            Path.mergePaths(new Path("_multipart"),
+    return mergePaths(filePath.getParent(),
+        mergePaths(new Path(filePath.getName().split("\\.")[0]),
+            mergePaths(new Path("_multipart"),
                 new Path(Path.SEPARATOR))));
+  }
+
+  private PathHandle getPathHandle(Path filePath) throws IOException {
+    FileStatus status = fs.getFileStatus(filePath);
+    return fs.getPathHandle(status);
+  }
+
+  private long totalPartsLen(List<Path> partHandles) throws IOException {
+    long totalLen = 0;
+    for (Path p: partHandles) {
+      totalLen += fs.getFileStatus(p).getLen();
+    }
+    return totalLen;
   }
 
   @Override
@@ -86,6 +113,17 @@ public class FileSystemMultipartUploader extends MultipartUploader {
   public PathHandle complete(Path filePath,
       List<Pair<Integer, PartHandle>> handles, UploadHandle multipartUploadId)
       throws IOException {
+
+    checkUploadId(multipartUploadId.toByteArray());
+
+    if (handles.isEmpty()) {
+      throw new IOException("Empty upload");
+    }
+    // If destination already exists, we believe we already completed it.
+    if (fs.exists(filePath)) {
+      return getPathHandle(filePath);
+    }
+
     handles.sort(Comparator.comparing(Pair::getKey));
     List<Path> partHandles = handles
         .stream()
@@ -97,22 +135,30 @@ public class FileSystemMultipartUploader extends MultipartUploader {
         .collect(Collectors.toList());
 
     Path collectorPath = createCollectorPath(filePath);
-    Path filePathInsideCollector = Path.mergePaths(collectorPath,
-        new Path(Path.SEPARATOR + filePath.getName()));
-    fs.create(filePathInsideCollector).close();
-    fs.concat(filePathInsideCollector,
-        partHandles.toArray(new Path[handles.size()]));
-    fs.rename(filePathInsideCollector, filePath, Options.Rename.OVERWRITE);
+    boolean emptyFile = totalPartsLen(partHandles) == 0;
+    if (emptyFile) {
+      fs.create(filePath).close();
+    } else {
+      Path filePathInsideCollector = mergePaths(collectorPath,
+          new Path(Path.SEPARATOR + filePath.getName()));
+      fs.create(filePathInsideCollector).close();
+      fs.concat(filePathInsideCollector,
+          partHandles.toArray(new Path[handles.size()]));
+      fs.rename(filePathInsideCollector, filePath, Options.Rename.OVERWRITE);
+    }
     fs.delete(collectorPath, true);
-    FileStatus status = fs.getFileStatus(filePath);
-    return fs.getPathHandle(status);
+    return getPathHandle(filePath);
   }
 
   @Override
   public void abort(Path filePath, UploadHandle uploadId) throws IOException {
     byte[] uploadIdByteArray = uploadId.toByteArray();
+    checkUploadId(uploadIdByteArray);
     Path collectorPath = new Path(new String(uploadIdByteArray, 0,
         uploadIdByteArray.length, Charsets.UTF_8));
+
+    // force a check for a file existing; raises FNFE if not found
+    fs.getFileStatus(collectorPath);
     fs.delete(collectorPath, true);
   }
 

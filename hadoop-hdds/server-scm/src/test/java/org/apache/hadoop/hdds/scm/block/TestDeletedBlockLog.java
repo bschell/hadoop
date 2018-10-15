@@ -19,11 +19,12 @@ package org.apache.hadoop.hdds.scm.block;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.RandomUtils;
-import org.apache.hadoop.hdds.scm.container.ContainerMapping;
-import org.apache.hadoop.hdds.scm.container.Mapping;
+import org.apache.hadoop.hdds.scm.container.SCMContainerManager;
+import org.apache.hadoop.hdds.scm.container.ContainerManager;
 import org.apache.hadoop.hdds.scm.container.common.helpers.ContainerInfo;
 import org.apache.hadoop.hdds.scm.container.common.helpers.ContainerWithPipeline;
 import org.apache.hadoop.hdds.scm.container.common.helpers.Pipeline;
+import org.apache.hadoop.hdds.scm.container.common.helpers.PipelineID;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
@@ -71,7 +72,7 @@ public class TestDeletedBlockLog {
   private static DeletedBlockLogImpl deletedBlockLog;
   private OzoneConfiguration conf;
   private File testDir;
-  private Mapping containerManager;
+  private ContainerManager containerManager;
   private List<DatanodeDetails> dnList;
 
   @Before
@@ -81,7 +82,7 @@ public class TestDeletedBlockLog {
     conf = new OzoneConfiguration();
     conf.setInt(OZONE_SCM_BLOCK_DELETION_MAX_RETRY, 20);
     conf.set(OZONE_METADATA_DIRS, testDir.getAbsolutePath());
-    containerManager = Mockito.mock(ContainerMapping.class);
+    containerManager = Mockito.mock(SCMContainerManager.class);
     deletedBlockLog = new DeletedBlockLogImpl(conf, containerManager);
     dnList = new ArrayList<>(3);
     setupContainerManager();
@@ -101,8 +102,8 @@ public class TestDeletedBlockLog {
     ContainerInfo containerInfo =
         new ContainerInfo.Builder().setContainerID(1).build();
     Pipeline pipeline =
-        new Pipeline(null, LifeCycleState.CLOSED, ReplicationType.RATIS,
-            ReplicationFactor.THREE, null);
+        new Pipeline(null, LifeCycleState.CLOSED,
+            ReplicationType.RATIS, ReplicationFactor.THREE, null);
     pipeline.addMember(dnList.get(0));
     pipeline.addMember(dnList.get(1));
     pipeline.addMember(dnList.get(2));
@@ -378,14 +379,16 @@ public class TestDeletedBlockLog {
     Assert.assertTrue(transactions.isFull());
   }
 
-  private void mockContainerInfo(long containerID, DatanodeDetails dd) throws IOException {
+  private void mockContainerInfo(long containerID, DatanodeDetails dd)
+      throws IOException {
     Pipeline pipeline =
         new Pipeline("fake", LifeCycleState.OPEN,
-            ReplicationType.STAND_ALONE, ReplicationFactor.ONE, "fake");
+            ReplicationType.STAND_ALONE, ReplicationFactor.ONE,
+            PipelineID.randomId());
     pipeline.addMember(dd);
 
     ContainerInfo.Builder builder = new ContainerInfo.Builder();
-    builder.setPipelineName(pipeline.getPipelineName())
+    builder.setPipelineID(pipeline.getId())
         .setReplicationType(pipeline.getType())
         .setReplicationFactor(pipeline.getFactor());
 

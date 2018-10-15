@@ -48,12 +48,11 @@ import static org.junit.Assert.assertFalse;
 
 public class TestCommandStatusReportHandler implements EventPublisher {
 
-  private static Logger LOG = LoggerFactory
+  private static final Logger LOG = LoggerFactory
       .getLogger(TestCommandStatusReportHandler.class);
   private CommandStatusReportHandler cmdStatusReportHandler;
   private String storagePath = GenericTestUtils.getRandomizedTempPath()
       .concat("/" + UUID.randomUUID().toString());
-  ;
 
   @Before
   public void setup() {
@@ -68,21 +67,20 @@ public class TestCommandStatusReportHandler implements EventPublisher {
     CommandStatusReportFromDatanode report = this.getStatusReport(Collections
         .emptyList());
     cmdStatusReportHandler.onMessage(report, this);
-    assertFalse(logCapturer.getOutput().contains("DeleteBlockCommandStatus"));
-    assertFalse(logCapturer.getOutput().contains
-        ("CloseContainerCommandStatus"));
-    assertFalse(logCapturer.getOutput().contains
-        ("ReplicateCommandStatus"));
+    assertFalse(logCapturer.getOutput().contains("Delete_Block_Status"));
+    assertFalse(logCapturer.getOutput().contains(
+        "Close_Container_Command_Status"));
+    assertFalse(logCapturer.getOutput().contains("Replicate_Command_Status"));
 
 
     report = this.getStatusReport(this.getCommandStatusList());
     cmdStatusReportHandler.onMessage(report, this);
     assertTrue(logCapturer.getOutput().contains("firing event of type " +
-        "DeleteBlockCommandStatus"));
+        "Delete_Block_Status"));
     assertTrue(logCapturer.getOutput().contains("firing event of type " +
-        "CloseContainerCommandStatus"));
+        "Close_Container_Command_Status"));
     assertTrue(logCapturer.getOutput().contains("firing event of type " +
-        "ReplicateCommandStatus"));
+        "Replicate_Command_Status"));
 
     assertTrue(logCapturer.getOutput().contains("type: " +
         "closeContainerCommand"));
@@ -93,13 +91,13 @@ public class TestCommandStatusReportHandler implements EventPublisher {
 
   }
 
-  private CommandStatusReportFromDatanode getStatusReport(List<CommandStatus>
-      reports) {
-    CommandStatusReportsProto report = TestUtils.createCommandStatusReport
-        (reports);
+  private CommandStatusReportFromDatanode getStatusReport(
+      List<CommandStatus> reports) {
+    CommandStatusReportsProto report = TestUtils.createCommandStatusReport(
+        reports);
     DatanodeDetails dn = TestUtils.randomDatanodeDetails();
-    return new SCMDatanodeHeartbeatDispatcher.CommandStatusReportFromDatanode
-        (dn, report);
+    return new SCMDatanodeHeartbeatDispatcher.CommandStatusReportFromDatanode(
+        dn, report);
   }
 
   @Override

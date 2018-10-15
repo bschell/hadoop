@@ -20,10 +20,10 @@ import com.google.common.base.Preconditions;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.scm.XceiverClientRatis;
 import org.apache.hadoop.hdds.scm.container.common.helpers.Pipeline;
+import org.apache.hadoop.hdds.scm.container.common.helpers.PipelineID;
 import org.apache.hadoop.hdds.scm.container.placement.algorithms
     .ContainerPlacementPolicy;
 import org.apache.hadoop.hdds.scm.node.NodeManager;
-import org.apache.hadoop.hdds.scm.pipelines.Node2PipelineMap;
 import org.apache.hadoop.hdds.scm.pipelines.PipelineManager;
 import org.apache.hadoop.hdds.scm.pipelines.PipelineSelector;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
@@ -38,7 +38,6 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 
 /**
  * Implementation of {@link PipelineManager}.
@@ -48,7 +47,6 @@ import java.util.UUID;
 public class RatisManagerImpl extends PipelineManager {
   private static final Logger LOG =
       LoggerFactory.getLogger(RatisManagerImpl.class);
-  private static final String PREFIX = "Ratis-";
   private final Configuration conf;
   private final NodeManager nodeManager;
   private final Set<DatanodeDetails> ratisMembers;
@@ -59,9 +57,8 @@ public class RatisManagerImpl extends PipelineManager {
    * @param nodeManager
    */
   public RatisManagerImpl(NodeManager nodeManager,
-      ContainerPlacementPolicy placementPolicy, long size, Configuration conf,
-      Node2PipelineMap map) {
-    super(map);
+      ContainerPlacementPolicy placementPolicy, long size, Configuration conf) {
+    super();
     this.conf = conf;
     this.nodeManager = nodeManager;
     ratisMembers = new HashSet<>();
@@ -76,23 +73,21 @@ public class RatisManagerImpl extends PipelineManager {
   public Pipeline allocatePipeline(ReplicationFactor factor) {
     List<DatanodeDetails> newNodesList = new LinkedList<>();
     List<DatanodeDetails> datanodes = nodeManager.getNodes(NodeState.HEALTHY);
-    int count = getReplicationCount(factor);
     //TODO: Add Raft State to the Nodes, so we can query and skip nodes from
     // data from datanode instead of maintaining a set.
     for (DatanodeDetails datanode : datanodes) {
       Preconditions.checkNotNull(datanode);
       if (!ratisMembers.contains(datanode)) {
         newNodesList.add(datanode);
-        if (newNodesList.size() == count) {
+        if (newNodesList.size() == factor.getNumber()) {
           // once a datanode has been added to a pipeline, exclude it from
           // further allocations
           ratisMembers.addAll(newNodesList);
-          LOG.info("Allocating a new ratis pipeline of size: {}", count);
-          // Start all pipeline names with "Ratis", easy to grep the logs.
-          String pipelineName = PREFIX +
-              UUID.randomUUID().toString().substring(PREFIX.length());
+          PipelineID pipelineID = PipelineID.randomId();
+          LOG.info("Allocating a new ratis pipeline of size: {} id: {}",
+                  factor.getNumber(), pipelineID);
           return PipelineSelector.newPipelineFromNodes(newNodesList,
-              ReplicationType.RATIS, factor, pipelineName);
+              ReplicationType.RATIS, factor, pipelineID);
         }
       }
     }
@@ -103,44 +98,32 @@ public class RatisManagerImpl extends PipelineManager {
     //TODO:move the initialization from SCM to client
     try (XceiverClientRatis client =
         XceiverClientRatis.newXceiverClientRatis(pipeline, conf)) {
-      client.createPipeline(pipeline.getPipelineName(), pipeline.getMachines());
+      client.createPipeline();
     }
+  }
+
+  public void processPipelineReport(Pipeline pipeline, DatanodeDetails dn) {
+    super.processPipelineReport(pipeline, dn);
+    ratisMembers.add(dn);
+  }
+
+  public synchronized boolean finalizePipeline(Pipeline pipeline) {
+    activePipelines.get(pipeline.getFactor().ordinal())
+            .removePipeline(pipeline.getId());
+    return true;
   }
 
   /**
    * Close the pipeline.
    */
-  public void closePipeline(Pipeline pipeline) {
-    super.closePipeline(pipeline);
+  public void closePipeline(Pipeline pipeline) throws IOException {
+    try (XceiverClientRatis client =
+        XceiverClientRatis.newXceiverClientRatis(pipeline, conf)) {
+      client.destroyPipeline();
+    }
     for (DatanodeDetails node : pipeline.getMachines()) {
       // A node should always be the in ratis members list.
       Preconditions.checkArgument(ratisMembers.remove(node));
     }
-    //TODO: should the raft ring also be destroyed as well?
-  }
-
-  /**
-   * list members in the pipeline .
-   *
-   * @param pipelineID
-   * @return the datanode
-   */
-  @Override
-  public List<DatanodeDetails> getMembers(String pipelineID)
-      throws IOException {
-    return null;
-  }
-
-  /**
-   * Update the datanode list of the pipeline.
-   *
-   * @param pipelineID
-   * @param newDatanodes
-   */
-  @Override
-  public void updatePipeline(String pipelineID,
-                             List<DatanodeDetails> newDatanodes)
-      throws IOException {
-
   }
 }

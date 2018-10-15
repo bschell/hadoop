@@ -23,6 +23,7 @@ import com.google.protobuf.ByteString;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.container.UpdateContainerTokenEvent;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.loghandler.event.LogHandlerTokenUpdatedEvent;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.scheduler.ContainerSchedulerEvent;
+import org.apache.hadoop.yarn.server.nodemanager.recovery.RecoveryIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
@@ -356,19 +357,26 @@ public class ContainerManagerImpl extends CompositeService implements
           stateStore.loadLocalizationState());
 
       RecoveredApplicationsState appsState = stateStore.loadApplicationsState();
-      for (ContainerManagerApplicationProto proto :
-           appsState.getApplications()) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Recovering application with state: " + proto.toString());
+      try (RecoveryIterator<ContainerManagerApplicationProto> rasIterator =
+               appsState.getIterator()) {
+        while (rasIterator.hasNext()) {
+          ContainerManagerApplicationProto proto = rasIterator.next();
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Recovering application with state: " + proto.toString());
+          }
+          recoverApplication(proto);
         }
-        recoverApplication(proto);
       }
 
-      for (RecoveredContainerState rcs : stateStore.loadContainersState()) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Recovering container with state: " + rcs);
+      try (RecoveryIterator<RecoveredContainerState> rcsIterator =
+               stateStore.getContainerStateIterator()) {
+        while (rcsIterator.hasNext()) {
+          RecoveredContainerState rcs = rcsIterator.next();
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Recovering container with state: " + rcs);
+          }
+          recoverContainer(rcs);
         }
-        recoverContainer(rcs);
       }
 
       // Recovery AMRMProxy state after apps and containers are recovered
@@ -1466,8 +1474,35 @@ public class ContainerManagerImpl extends CompositeService implements
       }
     }
     ContainerStatus containerStatus = container.cloneAndGetContainerStatus();
-    LOG.info("Returning " + containerStatus);
+    logContainerStatus("Returning ", containerStatus);
     return containerStatus;
+  }
+
+  private void logContainerStatus(String prefix, ContainerStatus status) {
+    StringBuilder sb = new StringBuilder();
+    sb.append(prefix);
+    sb.append("ContainerStatus: [");
+    sb.append("ContainerId: ");
+    sb.append(status.getContainerId()).append(", ");
+    sb.append("ExecutionType: ");
+    sb.append(status.getExecutionType()).append(", ");
+    sb.append("State: ");
+    sb.append(status.getState()).append(", ");
+    sb.append("Capability: ");
+    sb.append(status.getCapability()).append(", ");
+    sb.append("Diagnostics: ");
+    sb.append(LOG.isDebugEnabled() ? status.getDiagnostics() : "...");
+    sb.append(", ");
+    sb.append("ExitStatus: ");
+    sb.append(status.getExitStatus()).append(", ");
+    sb.append("IP: ");
+    sb.append(status.getIPs()).append(", ");
+    sb.append("Host: ");
+    sb.append(status.getHost()).append(", ");
+    sb.append("ContainerSubState: ");
+    sb.append(status.getContainerSubState());
+    sb.append("]");
+    LOG.info(sb.toString());
   }
 
   @Private
@@ -1801,6 +1836,7 @@ public class ContainerManagerImpl extends CompositeService implements
   public void reInitializeContainer(ContainerId containerId,
       ContainerLaunchContext reInitLaunchContext, boolean autoCommit)
       throws YarnException {
+    LOG.debug("{} requested reinit", containerId);
     Container container = preReInitializeOrLocalizeCheck(containerId,
         ReInitOp.RE_INIT);
     ResourceSet resourceSet = new ResourceSet();

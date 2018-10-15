@@ -28,6 +28,8 @@ service ClientAMProtocolService {
   rpc stop(StopRequestProto) returns (StopResponseProto);
   rpc upgradeService(UpgradeServiceRequestProto)
     returns (UpgradeServiceResponseProto);
+  rpc cancelUpgrade(CancelUpgradeRequestProto)
+    returns (CancelUpgradeResponseProto);
   rpc restartService(RestartServiceRequestProto)
     returns (RestartServiceResponseProto);
   rpc upgrade(CompInstancesUpgradeRequestProto) returns
@@ -66,10 +68,17 @@ message StopResponseProto {
 message UpgradeServiceRequestProto {
   optional string version = 1;
   optional bool autoFinalize = 2;
+  optional bool expressUpgrade = 3;
 }
 
 message UpgradeServiceResponseProto {
   optional string error = 1;
+}
+
+message CancelUpgradeRequestProto {
+}
+
+message CancelUpgradeResponseProto {
 }
 
 message RestartServiceRequestProto {

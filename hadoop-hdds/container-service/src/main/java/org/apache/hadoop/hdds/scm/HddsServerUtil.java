@@ -18,12 +18,15 @@
 package org.apache.hadoop.hdds.scm;
 
 import com.google.common.base.Optional;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.ozone.OzoneConfigKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.Map;
@@ -180,11 +183,11 @@ public final class HddsServerUtil {
    * SCM.
    *
    * @param conf - Ozone Config
-   * @return - HB interval in seconds.
+   * @return - HB interval in milli seconds.
    */
   public static long getScmHeartbeatInterval(Configuration conf) {
     return conf.getTimeDuration(HDDS_HEARTBEAT_INTERVAL,
-        HDDS_HEARTBEAT_INTERVAL_DEFAULT, TimeUnit.SECONDS);
+        HDDS_HEARTBEAT_INTERVAL_DEFAULT, TimeUnit.MILLISECONDS);
   }
 
   /**
@@ -202,7 +205,7 @@ public final class HddsServerUtil {
 
     long heartbeatThreadFrequencyMs = getScmheartbeatCheckerInterval(conf);
 
-    long heartbeatIntervalMs = getScmHeartbeatInterval(conf) * 1000;
+    long heartbeatIntervalMs = getScmHeartbeatInterval(conf);
 
 
     // Make sure that StaleNodeInterval is configured way above the frequency
@@ -311,5 +314,23 @@ public final class HddsServerUtil {
         new HashMap<>();
     services.put(OZONE_SCM_SERVICE_ID, serviceInstances);
     return services;
+  }
+
+  public static String getOzoneDatanodeRatisDirectory(Configuration conf) {
+    final String ratisDir = File.separator + "ratis";
+    String storageDir = conf.get(
+            OzoneConfigKeys.DFS_CONTAINER_RATIS_DATANODE_STORAGE_DIR);
+
+    if (Strings.isNullOrEmpty(storageDir)) {
+      storageDir = conf.get(OzoneConfigKeys
+              .OZONE_METADATA_DIRS);
+      Preconditions.checkNotNull(storageDir, "ozone.metadata.dirs " +
+              "cannot be null, Please check your configs.");
+      storageDir = storageDir.concat(ratisDir);
+      LOG.warn("Storage directory for Ratis is not configured." +
+               "Mapping Ratis storage under {}. It is a good idea " +
+               "to map this to an SSD disk.", storageDir);
+    }
+    return storageDir;
   }
 }

@@ -18,9 +18,10 @@
 
 package org.apache.hadoop.hdds.scm;
 
-import com.google.common.base.Preconditions;
 import org.apache.hadoop.hdds.HddsUtils;
-import org.apache.ratis.shaded.com.google.protobuf
+import org.apache.hadoop.io.MultipleIOException;
+import org.apache.ratis.retry.RetryPolicy;
+import org.apache.ratis.thirdparty.com.google.protobuf
     .InvalidProtocolBufferException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.scm.client.HddsClientUtils;
@@ -38,16 +39,18 @@ import org.apache.ratis.protocol.RaftGroup;
 import org.apache.ratis.protocol.RaftPeer;
 import org.apache.ratis.rpc.RpcType;
 import org.apache.ratis.rpc.SupportedRpcType;
-import org.apache.ratis.shaded.com.google.protobuf.ByteString;
+import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
+import org.apache.ratis.util.CheckedBiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -64,35 +67,48 @@ public final class XceiverClientRatis extends XceiverClientSpi {
         ScmConfigKeys.DFS_CONTAINER_RATIS_RPC_TYPE_DEFAULT);
     final int maxOutstandingRequests =
         HddsClientUtils.getMaxOutstandingRequests(ozoneConf);
+    final RetryPolicy retryPolicy = RatisHelper.createRetryPolicy(ozoneConf);
     return new XceiverClientRatis(pipeline,
-        SupportedRpcType.valueOfIgnoreCase(rpcType), maxOutstandingRequests);
+        SupportedRpcType.valueOfIgnoreCase(rpcType), maxOutstandingRequests,
+        retryPolicy);
   }
 
   private final Pipeline pipeline;
   private final RpcType rpcType;
   private final AtomicReference<RaftClient> client = new AtomicReference<>();
   private final int maxOutstandingRequests;
+  private final RetryPolicy retryPolicy;
 
   /**
    * Constructs a client.
    */
   private XceiverClientRatis(Pipeline pipeline, RpcType rpcType,
-      int maxOutStandingChunks) {
+      int maxOutStandingChunks, RetryPolicy retryPolicy) {
     super();
     this.pipeline = pipeline;
     this.rpcType = rpcType;
     this.maxOutstandingRequests = maxOutStandingChunks;
+    this.retryPolicy = retryPolicy;
   }
 
   /**
    * {@inheritDoc}
    */
-  public void createPipeline(String clusterId, List<DatanodeDetails> datanodes)
-      throws IOException {
-    RaftGroup group = RatisHelper.newRaftGroup(datanodes);
-    LOG.debug("initializing pipeline:{} with nodes:{}", clusterId,
-        group.getPeers());
-    reinitialize(datanodes, group);
+  public void createPipeline() throws IOException {
+    final RaftGroup group = RatisHelper.newRaftGroup(pipeline);
+    LOG.debug("creating pipeline:{} with {}", pipeline.getId(), group);
+    callRatisRpc(pipeline.getMachines(),
+        (raftClient, peer) -> raftClient.groupAdd(group, peer.getId()));
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  public void destroyPipeline() throws IOException {
+    final RaftGroup group = RatisHelper.newRaftGroup(pipeline);
+    LOG.debug("destroying pipeline:{} with {}", pipeline.getId(), group);
+    callRatisRpc(pipeline.getMachines(), (raftClient, peer) -> raftClient
+        .groupRemove(group.getGroupId(), true, peer.getId()));
   }
 
   /**
@@ -105,47 +121,28 @@ public final class XceiverClientRatis extends XceiverClientSpi {
     return HddsProtos.ReplicationType.RATIS;
   }
 
-  private void reinitialize(List<DatanodeDetails> datanodes, RaftGroup group)
+  private void callRatisRpc(List<DatanodeDetails> datanodes,
+      CheckedBiConsumer<RaftClient, RaftPeer, IOException> rpc)
       throws IOException {
     if (datanodes.isEmpty()) {
       return;
     }
 
-    IOException exception = null;
-    for (DatanodeDetails d : datanodes) {
-      try {
-        reinitialize(d, group);
+    final List<IOException> exceptions =
+        Collections.synchronizedList(new ArrayList<>());
+    datanodes.parallelStream().forEach(d -> {
+      final RaftPeer p = RatisHelper.toRaftPeer(d);
+      try (RaftClient client = RatisHelper
+          .newRaftClient(rpcType, p, retryPolicy)) {
+        rpc.accept(client, p);
       } catch (IOException ioe) {
-        if (exception == null) {
-          exception = new IOException(
-              "Failed to reinitialize some of the RaftPeer(s)", ioe);
-        } else {
-          exception.addSuppressed(ioe);
-        }
+        exceptions.add(
+            new IOException("Failed invoke Ratis rpc " + rpc + " for " + d,
+                ioe));
       }
-    }
-    if (exception != null) {
-      throw exception;
-    }
-  }
-
-  /**
-   * Adds a new peers to the Ratis Ring.
-   *
-   * @param datanode - new datanode
-   * @param group    - Raft group
-   * @throws IOException - on Failure.
-   */
-  private void reinitialize(DatanodeDetails datanode, RaftGroup group)
-      throws IOException {
-    final RaftPeer p = RatisHelper.toRaftPeer(datanode);
-    try (RaftClient client = RatisHelper.newRaftClient(rpcType, p)) {
-      client.reinitialize(group, p.getId());
-    } catch (IOException ioe) {
-      LOG.error("Failed to reinitialize RaftPeer:{} datanode: {}  ",
-          p, datanode, ioe);
-      throw new IOException("Failed to reinitialize RaftPeer " + p
-          + "(datanode=" + datanode + ")", ioe);
+    });
+    if (!exceptions.isEmpty()) {
+      throw MultipleIOException.createIOException(exceptions);
     }
   }
 
@@ -157,13 +154,13 @@ public final class XceiverClientRatis extends XceiverClientSpi {
   @Override
   public void connect() throws Exception {
     LOG.debug("Connecting to pipeline:{} leader:{}",
-        getPipeline().getPipelineName(),
+        getPipeline().getId(),
         RatisHelper.toRaftPeerId(pipeline.getLeader()));
     // TODO : XceiverClient ratis should pass the config value of
     // maxOutstandingRequests so as to set the upper bound on max no of async
     // requests to be handled by raft client
     if (!client.compareAndSet(null,
-        RatisHelper.newRaftClient(rpcType, getPipeline()))) {
+        RatisHelper.newRaftClient(rpcType, getPipeline(), retryPolicy))) {
       throw new IllegalStateException("Client is already connected.");
     }
   }
@@ -184,34 +181,13 @@ public final class XceiverClientRatis extends XceiverClientSpi {
     return Objects.requireNonNull(client.get(), "client is null");
   }
 
-  private RaftClientReply sendRequest(ContainerCommandRequestProto request)
-      throws IOException {
-    boolean isReadOnlyRequest = HddsUtils.isReadOnly(request);
-    ByteString byteString = request.toByteString();
-    LOG.debug("sendCommand {} {}", isReadOnlyRequest, request);
-    final RaftClientReply reply =  isReadOnlyRequest ?
-        getClient().sendReadOnly(() -> byteString) :
-        getClient().send(() -> byteString);
-    LOG.debug("reply {} {}", isReadOnlyRequest, reply);
-    return reply;
-  }
-
   private CompletableFuture<RaftClientReply> sendRequestAsync(
-      ContainerCommandRequestProto request) throws IOException {
+      ContainerCommandRequestProto request) {
     boolean isReadOnlyRequest = HddsUtils.isReadOnly(request);
     ByteString byteString = request.toByteString();
     LOG.debug("sendCommandAsync {} {}", isReadOnlyRequest, request);
     return isReadOnlyRequest ? getClient().sendReadOnlyAsync(() -> byteString) :
         getClient().sendAsync(() -> byteString);
-  }
-
-  @Override
-  public ContainerCommandResponseProto sendCommand(
-      ContainerCommandRequestProto request) throws IOException {
-    final RaftClientReply reply = sendRequest(request);
-    Preconditions.checkState(reply.isSuccess());
-    return ContainerCommandResponseProto.parseFrom(
-        reply.getMessage().getContent());
   }
 
   /**
@@ -223,8 +199,7 @@ public final class XceiverClientRatis extends XceiverClientSpi {
    */
   @Override
   public CompletableFuture<ContainerCommandResponseProto> sendCommandAsync(
-      ContainerCommandRequestProto request)
-      throws IOException, ExecutionException, InterruptedException {
+      ContainerCommandRequestProto request) {
     return sendRequestAsync(request).whenComplete((reply, e) ->
           LOG.debug("received reply {} for request: {} exception: {}", request,
               reply, e))

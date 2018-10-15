@@ -17,30 +17,30 @@
  */
 package org.apache.hadoop.ozone.container.keyvalue.helpers;
 
-import com.google.common.base.Preconditions;
-import org.apache.commons.io.FileUtils;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdds.conf.OzoneConfiguration;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
-    .ContainerCommandRequestProto;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
-    .ContainerCommandResponseProto;
-import org.apache.hadoop.ozone.container.common.helpers.ContainerUtils;
-import org.apache.hadoop.ozone.container.common.helpers.KeyData;
-import org.apache.hadoop.ozone.container.keyvalue.KeyValueContainerData;
-import org.apache.hadoop.utils.MetadataKeyFilters;
-import org.apache.hadoop.utils.MetadataStore;
-import org.apache.hadoop.utils.MetadataStoreBuilder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
+import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
+    .ContainerCommandRequestProto;
+import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
+    .ContainerCommandResponseProto;
+import org.apache.hadoop.ozone.container.common.helpers.ContainerUtils;
+import org.apache.hadoop.ozone.container.common.helpers.BlockData;
+import org.apache.hadoop.ozone.container.keyvalue.KeyValueContainerData;
+import org.apache.hadoop.utils.MetadataKeyFilters;
+import org.apache.hadoop.utils.MetadataStore;
+import org.apache.hadoop.utils.MetadataStoreBuilder;
+
+import com.google.common.base.Preconditions;
+import org.apache.commons.io.FileUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Class which defines utility methods for KeyValueContainer.
@@ -116,7 +116,7 @@ public final class KeyValueContainerUtil {
     File chunksPath = new File(containerData.getChunksPath());
 
     // Close the DB connection and remove the DB handler from cache
-    KeyUtils.removeDB(containerData, conf);
+    BlockUtils.removeDB(containerData, conf);
 
     // Delete the Container MetaData path.
     FileUtils.deleteDirectory(containerMetaDataPath);
@@ -157,7 +157,7 @@ public final class KeyValueContainerUtil {
    * @throws IOException
    */
   public static void parseKVContainerData(KeyValueContainerData kvContainerData,
-      OzoneConfiguration config) throws IOException {
+      Configuration config) throws IOException {
 
     long containerID = kvContainerData.getContainerID();
     File metadataPath = new File(kvContainerData.getMetadataPath());
@@ -175,16 +175,16 @@ public final class KeyValueContainerUtil {
     }
     kvContainerData.setDbFile(dbFile);
 
-    MetadataStore metadata = KeyUtils.getDB(kvContainerData, config);
+    MetadataStore metadata = BlockUtils.getDB(kvContainerData, config);
     long bytesUsed = 0;
     List<Map.Entry<byte[], byte[]>> liveKeys = metadata
         .getRangeKVs(null, Integer.MAX_VALUE,
             MetadataKeyFilters.getNormalKeyFilter());
     bytesUsed = liveKeys.parallelStream().mapToLong(e-> {
-      KeyData keyData;
+      BlockData blockData;
       try {
-        keyData = KeyUtils.getKeyData(e.getValue());
-        return keyData.getSize();
+        blockData = BlockUtils.getBlockData(e.getValue());
+        return blockData.getSize();
       } catch (IOException ex) {
         return 0L;
       }

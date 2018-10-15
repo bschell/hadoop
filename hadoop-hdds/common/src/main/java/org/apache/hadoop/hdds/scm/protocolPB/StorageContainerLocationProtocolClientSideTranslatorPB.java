@@ -20,8 +20,12 @@ import com.google.common.base.Preconditions;
 import com.google.protobuf.RpcController;
 import com.google.protobuf.ServiceException;
 import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.ForceExitChillModeRequestProto;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.ForceExitChillModeResponseProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.GetContainerWithPipelineRequestProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.GetContainerWithPipelineResponseProto;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.InChillModeRequestProto;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.InChillModeResponseProto;
 import org.apache.hadoop.hdds.scm.ScmInfo;
 import org.apache.hadoop.hdds.scm.container.common.helpers.ContainerWithPipeline;
 import org.apache.hadoop.hdds.scm.container.common.helpers.ContainerInfo;
@@ -97,8 +101,9 @@ public final class StorageContainerLocationProtocolClientSideTranslatorPB
    * @throws IOException
    */
   @Override
-  public ContainerWithPipeline allocateContainer(HddsProtos.ReplicationType type,
-      HddsProtos.ReplicationFactor factor, String owner) throws IOException {
+  public ContainerWithPipeline allocateContainer(
+      HddsProtos.ReplicationType type, HddsProtos.ReplicationFactor factor,
+      String owner) throws IOException {
 
     ContainerRequestProto request = ContainerRequestProto.newBuilder()
         .setReplicationFactor(factor)
@@ -116,7 +121,8 @@ public final class StorageContainerLocationProtocolClientSideTranslatorPB
       throw new IOException(response.hasErrorMessage() ?
           response.getErrorMessage() : "Allocate container failed.");
     }
-    return ContainerWithPipeline.fromProtobuf(response.getContainerWithPipeline());
+    return ContainerWithPipeline.fromProtobuf(
+        response.getContainerWithPipeline());
   }
 
   public ContainerInfo getContainer(long containerID) throws IOException {
@@ -138,17 +144,18 @@ public final class StorageContainerLocationProtocolClientSideTranslatorPB
   /**
    * {@inheritDoc}
    */
-  public ContainerWithPipeline getContainerWithPipeline(long containerID) throws IOException {
+  public ContainerWithPipeline getContainerWithPipeline(long containerID)
+      throws IOException {
     Preconditions.checkState(containerID >= 0,
         "Container ID cannot be negative");
-    GetContainerWithPipelineRequestProto request = GetContainerWithPipelineRequestProto
-        .newBuilder()
-        .setContainerID(containerID)
-        .build();
+    GetContainerWithPipelineRequestProto request =
+        GetContainerWithPipelineRequestProto.newBuilder()
+            .setContainerID(containerID).build();
     try {
       GetContainerWithPipelineResponseProto response =
           rpcProxy.getContainerWithPipeline(NULL_RPC_CONTROLLER, request);
-      return ContainerWithPipeline.fromProtobuf(response.getContainerWithPipeline());
+      return ContainerWithPipeline.fromProtobuf(
+          response.getContainerWithPipeline());
     } catch (ServiceException e) {
       throw ProtobufHelper.getRemoteException(e);
     }
@@ -312,6 +319,44 @@ public final class StorageContainerLocationProtocolClientSideTranslatorPB
       throw ProtobufHelper.getRemoteException(e);
     }
 
+  }
+
+  /**
+   * Check if SCM is in chill mode.
+   *
+   * @return Returns true if SCM is in chill mode else returns false.
+   * @throws IOException
+   */
+  @Override
+  public boolean inChillMode() throws IOException {
+    InChillModeRequestProto request =
+        InChillModeRequestProto.getDefaultInstance();
+    try {
+      InChillModeResponseProto resp = rpcProxy.inChillMode(
+          NULL_RPC_CONTROLLER, request);
+      return resp.getInChillMode();
+    } catch (ServiceException e) {
+      throw ProtobufHelper.getRemoteException(e);
+    }
+  }
+
+  /**
+   * Force SCM out of Chill mode.
+   *
+   * @return returns true if operation is successful.
+   * @throws IOException
+   */
+  @Override
+  public boolean forceExitChillMode() throws IOException {
+    ForceExitChillModeRequestProto request =
+        ForceExitChillModeRequestProto.getDefaultInstance();
+    try {
+      ForceExitChillModeResponseProto resp = rpcProxy
+          .forceExitChillMode(NULL_RPC_CONTROLLER, request);
+      return resp.getExitedChillMode();
+    } catch (ServiceException e) {
+      throw ProtobufHelper.getRemoteException(e);
+    }
   }
 
   @Override
